@@ -1,0 +1,366 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>TRPGシナリオHTML変換器</title>
+<style>
+body{font:14px/1.7 system-ui,-apple-system,"Segoe UI",Roboto,"Noto Sans JP","Meiryo",sans-serif;margin:0;padding:16px;background:#fafafa;color:#222}
+h1{font-size:20px;margin:0 0 8px}
+.wrap{display:grid;grid-template-columns:1fr;gap:12px;max-width:1200px;margin:0 auto}
+textarea{width:100%;min-height:38vh;padding:10px;border:1px solid #ddd;border-radius:8px;background:#fff;resize:vertical;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+.controls{display:flex;flex-wrap:wrap;gap:8px}
+button{border:1px solid #ccc;border-radius:8px;background:#fff;padding:.5em .9em;cursor:pointer}
+.out{min-height:38vh}
+small.note{color:#666}
+pre.sample{white-space:pre-wrap;background:#fff;border:1px dashed #ddd;border-radius:8px;padding:8px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>TRPGシナリオHTML変換器</h1>
+  <div class="controls">
+    <button id="btnConvert">変換</button>
+    <button id="btnDownload">ダウンロード</button>
+    <span id="status"><small class="note">同じフォルダの <code>template.html</code> を読み込みます。</small></span>
+  </div>
+  <textarea id="src" placeholder="1行目=タイトル、2行目=固定キー（[A-Za-z0-9_-]）&#10;◆ main&#10;# 導入 @タグA&#10;本文…"></textarea>
+  <textarea id="dst" class="out" placeholder="ここに完成HTMLが出力されます"></textarea>
+  <details>
+    <summary>入力仕様のチートシート</summary>
+    <pre class="sample">『TRPGシナリオ（仮）』
+TRPG-scenario_01
+◆ info
+# このシナリオについて @概要 情報
+テキスト テキスト ◆ other は本文扱い
+◆ main
+# 導入 @導入
+導入本文 #導入##場面###小項 みたいなジャンプを適所で
+## 場面 @シーン 調査
+駅前での聞き込み。◆info#このシナリオについて にも飛べる
+### 古書店の店主 @NPC
+口数は少ないが鋭い。
+◆ etc
+# 付録 @付録
+…</pre>
+  </details>
+</div>
+
+<script>
+(()=>{"use strict";
+/* ====== DOM ====== */
+const $=s=>document.querySelector(s);
+const src=$("#src"), dst=$("#dst"), btnC=$("#btnConvert"), btnD=$("#btnDownload"), status=$("#status");
+
+/* ====== Utils ====== */
+const VALID_KEY=/^[A-Za-z0-9_-]+$/;
+const slugify=(s)=>{
+  return s.normalize("NFKD")
+    .replace(/[^\w\s-]/g,"")
+    .replace(/\s+/g,"-")
+    .replace(/-+/g,"-")
+    .toLowerCase()
+    .replace(/^-/,"").replace(/-$/,"") || "sec";
+};
+function escapeText(text){ return text; } // textノードで扱うのでHTMLエスケープ不要
+
+function makeEl(name, attrs={}, children=[]){
+  const el=document.createElement(name);
+  for(const [k,v] of Object.entries(attrs||{})){
+    if(k==="text"){ el.textContent=v; }
+    else if(k==="dataset"){ for(const [dk,dv] of Object.entries(v)) el.dataset[dk]=dv; }
+    else if(k==="className"){ el.className=v; }
+    else{ el.setAttribute(k,v); }
+  }
+  for(const ch of children) el.appendChild(ch);
+  return el;
+}
+
+/* ====== Inline formatting (no innerHTML) ======
+  **bold** / *italic* / __underline__ / ~~strike~~
+  plus inline jump tokens which we'll post-process later.
+*/
+function formatInline(text){
+  const root=document.createDocumentFragment();
+  let i=0;
+  const patterns=[
+    {re:/\*\*(.+?)\*\*/y,  wrap:(t)=>["strong",t]},
+    {re:/\*(.+?)\*/y,      wrap:(t)=>["em",t]},
+    {re:/__(.+?)__/y,      wrap:(t)=>["u",t]},
+    {re:/~~(.+?)~~/y,      wrap:(t)=>["s",t]},
+  ];
+  while(i<text.length){
+    let matched=false;
+    for(const p of patterns){
+      p.re.lastIndex=i;
+      const m=p.re.exec(text);
+      if(m){
+        if(m.index>i) root.appendChild(document.createTextNode(text.slice(i,m.index)));
+        const [tag,content]=p.wrap(m[1]);
+        const el=document.createElement(tag);
+        el.appendChild(document.createTextNode(content));
+        root.appendChild(el);
+        i=p.re.lastIndex;
+        matched=true; break;
+      }
+    }
+    if(!matched){
+      root.appendChild(document.createTextNode(text[i]));
+      i++;
+    }
+  }
+  return root;
+}
+
+/* ====== Parse plaintext ====== */
+function parseInput(raw){
+  const lines=raw.replace(/\r\n?/g,"\n").split("\n");
+  if(lines.length<2) throw new Error("先頭2行（タイトル/固定キー）が不足しています。");
+  const title=lines[0].trim();
+  const key=lines[1].trim();
+  if(!title) throw new Error("タイトルが空です。");
+  if(!VALID_KEY.test(key)) throw new Error("固定キーが不正です。使用可能文字は [A-Za-z0-9_-] のみ。");
+
+  // body
+  const body=lines.slice(2);
+
+  const pages={info:[], main:[], etc:[]};
+  let cur="main"; // デフォルトは main
+  // code block state
+  let inCode=false, codeFence=null, codeLang="", codeBuf=[];
+  // heading map for IDs per page (for jump linking)
+  const idMap={info:new Map(), main:new Map(), etc:new Map()};
+
+  function pushParagraph(arr, text){
+    if(text.trim().length===0) return;
+    arr.push({type:"p", text});
+  }
+  function closeCodeTo(pageArr){
+    const pre=makeEl("pre",{className:"code"},[
+      makeEl("button",{className:"copy",text:"copy"}),
+      makeEl("code",{},[document.createTextNode(codeBuf.join("\n"))])
+    ]);
+    pageArr.push({type:"node", node:pre});
+  }
+  function addHeading(pageArr, level, text, tags){
+    // extract trailing @tags (already provided) & ban @メモ
+    if(tags.includes("メモ")) throw new Error("@メモ は使用禁止です（変換器が自動付与）。");
+    const idBase=slugify(text);
+    let id=idBase, n=2;
+    const map=idMap[cur];
+    while(map.has(id)) { id=idBase+"-"+n++; }
+    map.set(id,text);
+    pageArr.push({type:"h", level, text, id, tags});
+  }
+
+  for(let i=0;i<body.length;i++){
+    let line=body[i];
+
+    // page directive
+    const mPage=line.match(/^◆\s*([^\s]+)\s*$/);
+    if(!inCode && mPage){
+      const name=mPage[1];
+      if(name==="info"||name==="main"||name==="etc"){ cur=name; continue; }
+      // invalid ◆ xxx → treat as paragraph text
+      // fallthrough below
+    }
+
+    // code fences
+    const mFence = line.match(/^(```|''')\s*([A-Za-z0-9#+.-_]*)\s*$/);
+    if(mFence && !inCode){
+      inCode=true; codeFence=mFence[1]; codeLang=mFence[2]||""; codeBuf=[];
+      continue;
+    }else if(mFence && inCode && mFence[1]===codeFence){
+      inCode=false;
+      closeCodeTo(pages[cur]);
+      continue;
+    }else if(inCode){
+      codeBuf.push(line);
+      continue;
+    }
+
+    // headings (# + space)
+    const mH=line.match(/^(#{1,3})\s+(.+?)\s*$/);
+    if(mH){
+      const level=mH[1].length;
+      let rawText=mH[2];
+      // pull tags at end
+      const tagMatches=[...rawText.matchAll(/\s@([^\s@]+)/g)].map(x=>x[1]);
+      let pure=rawText.replace(/\s@([^\s@]+)/g,"").trim();
+      const tags=[];
+      for(const t of tagMatches){
+        const name=t.trim();
+        if(!name) continue;
+        if(name==="メモ") throw new Error("@メモ は使用禁止です（変換器が自動付与）。");
+        tags.push(name);
+      }
+      addHeading(pages[cur], level, pure, tags);
+      continue;
+    }
+
+    // keep as paragraph (including lines like "◆ other" )
+    pushParagraph(pages[cur], line);
+  }
+
+  return {title,key,pages,idMap};
+}
+
+/* ====== Build DOM for template ====== */
+async function buildHTML(parsed){
+  const tplText = await fetch("template.html").then(r=>{
+    if(!r.ok) throw new Error("template.html が読み込めませんでした。");
+    return r.text();
+  });
+
+  // Load into DOM
+  const doc = new DOMParser().parseFromString(tplText,"text/html");
+
+  // set title & key
+  doc.title = parsed.title;
+  const metaKey = doc.querySelector('meta[name="trpg-key"]');
+  if(metaKey) metaKey.setAttribute("content", parsed.key);
+  const headerTitle = doc.querySelector("header .title");
+  if(headerTitle) headerTitle.textContent = parsed.title;
+
+  // helpers to inject content
+  function mountPage(pageName, items){
+    const sec = doc.querySelector(`section.page[data-page="${pageName}"]`);
+    if(!sec) return;
+    // clear placeholder comments
+    while(sec.firstChild) sec.removeChild(sec.firstChild);
+
+    const stack=[]; // to place paragraphs under last heading until next peer/parent
+    const append = (node)=>sec.appendChild(node);
+
+    for(const item of items){
+      if(item.type==="h"){
+        const tagName = item.level===1? "h1" : item.level===2? "h2" : "h3";
+        const h = doc.createElement(tagName);
+        h.dataset.id=item.id;
+        if(item.tags.length) h.dataset.tags=item.tags.join(" ");
+        h.appendChild(document.createTextNode(item.text));
+        append(h);
+      }else if(item.type==="p"){
+        const p=doc.createElement("p");
+        // inline formatting
+        p.appendChild(formatInline(item.text));
+        append(p);
+      }else if(item.type==="node"){
+        append(item.node.cloneNode(true));
+      }
+    }
+  }
+
+  mountPage("info", parsed.pages.info);
+  mountPage("main", parsed.pages.main);
+  mountPage("etc",  parsed.pages.etc);
+
+  // Build heading index to enable in-text jump autolinks (#page:id naming & title auto-fill already handled by template runtime)
+  // ここではアンカー文字列をそのまま入れておく（リンクテキストはテンプレが自動補完）
+  function wireJumps(){
+    const map = {
+      info: collectIds(doc,'section.page[data-page="info"]'),
+      main: collectIds(doc,'section.page[data-page="main"]'),
+      etc:  collectIds(doc,'section.page[data-page="etc"]')
+    };
+    // walk text nodes and rewrite tokens into <a>…</a> safely
+    const walker = doc.createTreeWalker(doc.body, NodeFilter.SHOW_TEXT, null);
+    const toReplace=[];
+    while(walker.nextNode()){
+      const n=walker.currentNode;
+      if(!n.nodeValue) continue;
+      const txt=n.nodeValue;
+
+      // ◆page#Big##Mid###Small  OR  #Big##Mid###Small (same page)
+      // We only create a link node; the template will fill visible text.
+      const pattern=/((?:◆(info|main|etc))?)#([^#\s]+)(?:##([^#\s]+))?(?:###([^#\s]+))?/g;
+      let m, parts=[], last=0, needs=false;
+      while((m=pattern.exec(txt))){
+        // validity: tokens must be separated by boundaries (space/line edges)
+        const leftOk = m.index===0 || /\s/.test(txt[m.index-1]);
+        const rightOk = pattern.lastIndex===txt.length || /\s/.test(txt[pattern.lastIndex]);
+        if(!leftOk || !rightOk) continue;
+        needs=true;
+        parts.push(document.createTextNode(txt.slice(last,m.index)));
+        const page = m[2] || null;
+        const labels=[m[3],m[4],m[5]].filter(Boolean);
+        const id = findIdByTrail(map, page, labels);
+        if(id){
+          const a=doc.createElement("a");
+          const targetPage = page || findPageOfId(map,id) || "main";
+          a.setAttribute("href","#"+targetPage+":"+id);
+          // visible name is auto-filled at runtime; keep empty for now
+          parts.push(a);
+        }else{
+          parts.push(document.createTextNode(m[0])); // fallback plain text
+        }
+        last=pattern.lastIndex;
+      }
+      if(needs){
+        if(last<txt.length) parts.push(document.createTextNode(txt.slice(last)));
+        toReplace.push({node:n,parts});
+      }
+    }
+    toReplace.forEach(({node,parts})=>{
+      const frag=doc.createDocumentFragment();
+      parts.forEach(p=>frag.appendChild(p));
+      node.parentNode.replaceChild(frag,node);
+    });
+
+    function collectIds(doc, sel){
+      const m=new Map();
+      doc.querySelectorAll(sel+" h1, "+sel+" h2, "+sel+" h3").forEach(h=>{
+        const id=h.dataset.id||h.id;
+        if(id) m.set(id,h.textContent.trim());
+      });
+      return m;
+    }
+    function findPageOfId(map,id){
+      for(const [pg,mp] of Object.entries(map)) if(mp.has(id)) return pg;
+      return null;
+    }
+    function findIdByTrail(map,page,labels){
+      // naive match by first label slug
+      if(!labels.length) return null;
+      const labelSlug=slugify(labels.at(-1));
+      const pool = page? [page] : ["info","main","etc"];
+      for(const pg of pool){
+        for(const [id,name] of map[pg]){
+          if(slugify(name)===labelSlug) return id;
+        }
+      }
+      return null;
+    }
+  }
+  wireJumps();
+
+  // serialize
+  const out = "<!doctype html>\n"+doc.documentElement.outerHTML;
+  return out;
+}
+
+/* ====== Actions ====== */
+btnC.onclick=async ()=>{
+  try{
+    status.textContent="変換中…";
+    const parsed = parseInput(src.value);
+    const html = await buildHTML(parsed);
+    dst.value = html;
+    status.textContent="完了 ✔️";
+  }catch(err){
+    status.textContent="エラー ❗ " + (err?.message||err);
+  }
+};
+btnD.onclick=()=>{
+  const blob=new Blob([dst.value||""],{type:"text/html;charset=utf-8"});
+  const a=document.createElement("a");
+  a.href=URL.createObjectURL(blob);
+  a.download="scenario.html";
+  a.click();
+  setTimeout(()=>URL.revokeObjectURL(a.href),1000);
+};
+
+})();
+</script>
+</body>
+</html>
