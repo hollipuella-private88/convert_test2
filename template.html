@@ -13,16 +13,24 @@
 }
 *{box-sizing:border-box} html,body{height:100%}
 body{margin:0;background:var(--bg);color:var(--text);font:16px/1.85 system-ui,-apple-system,"Segoe UI",Roboto,"Noto Sans JP","Yu Gothic UI","Meiryo",sans-serif}
-header{position:sticky;top:0;z-index:50;height:var(--header);display:grid;grid-template-columns:auto 1fr auto;align-items:center;padding:8px;border-bottom:1px solid var(--line);background:#fff}
+header{position:sticky;top:0;z-index:60;height:var(--header);display:grid;grid-template-columns:auto 1fr auto;align-items:center;padding:8px;border-bottom:1px solid var(--line);background:#fff}
 .title{text-align:center;font-weight:700}
 .icon{width:40px;height:40px;border:1px solid var(--line);border-radius:var(--round);background:#fff;display:grid;place-items:center;cursor:pointer}
 main{height:calc(100dvh - var(--header) - var(--tabs));overflow:auto;scroll-behavior:smooth;padding:16px min(6vw,28px) 120px}
-nav.tabs{position:sticky;bottom:0;height:var(--tabs);display:grid;grid-template-columns:repeat(3,1fr);border-top:1px solid var(--line);background:#fff;z-index:40}
+nav.tabs{position:sticky;bottom:0;height:var(--tabs);display:grid;grid-template-columns:repeat(3,1fr);border-top:1px solid var(--line);background:#fff;z-index:50}
 .tab{appearance:none;border:0;background:#fff;cursor:pointer}.tab[aria-current="page"]{background:var(--accent);font-weight:700}
 .page{display:none}.page[aria-hidden="false"]{display:block}
-/* ドロワー */
-aside.drawer{position:fixed;top:var(--header);bottom:0;width:var(--drawerW);background:#fff;border:1px solid var(--line);box-shadow:var(--shadow);overflow:auto;transform:translateX(-110%);transition:.25s}
-aside.drawer.right{right:0;left:auto;transform:translateX(110%)} aside.drawer.open{transform:translateX(0)}
+
+/* ドロワー（最前面制御を見直し） */
+aside.drawer{
+  position:fixed;top:var(--header);bottom:0;left:0;
+  width:var(--drawerW);background:#fff;border:1px solid var(--line);
+  box-shadow:var(--shadow);overflow:auto;transform:translateX(-110%);transition:.25s;
+  z-index:900;
+}
+aside.drawer.right{right:0;left:auto;transform:translateX(110%)}
+aside.drawer.open{transform:translateX(0)}
+
 /* TOC */
 .toc{display:grid;grid-template-columns:110px 1fr;gap:8px;padding:8px}
 .toc .pages{border-right:1px solid var(--line);padding-right:8px}
@@ -31,6 +39,7 @@ aside.drawer.right{right:0;left:auto;transform:translateX(110%)} aside.drawer.op
 .toc .row{display:grid;grid-template-columns:24px 1fr;gap:6px;border-bottom:1px dashed #eee;padding:8px 4px}
 .toc .tw{cursor:pointer;color:#666}.tw.off{opacity:.25;pointer-events:none}
 .lvl2{padding-left:16px}.lvl3{padding-left:32px}
+
 /* 検索 */
 .searchbar{display:flex;gap:8px;padding:8px}.searchbar input{flex:1;border:1px solid var(--line);border-radius:var(--round);padding:.6em .8em}
 .chips{display:flex;gap:6px;flex-wrap:wrap;padding:0 8px 8px}
@@ -41,6 +50,7 @@ aside.drawer.right{right:0;left:auto;transform:translateX(110%)} aside.drawer.op
 .card .title{font-weight:700;margin:.2em 0}
 .card .content .cont{display:none}.card .content .dots{display:inline}
 .card.open .content .cont{display:inline}.card.open .content .dots{display:none}
+
 /* 見出し & コード */
 h1,h2,h3{scroll-margin-top:calc(var(--header) + 10px)}
 h1{text-align:center;font-size:1.6rem;font-weight:800;border-bottom:1px solid var(--line);padding-bottom:.4em;margin:1.2em 0 .8em}
@@ -48,12 +58,14 @@ h2{font-size:1.25rem;font-weight:700;margin:1.3em 0 .2em}
 h3{font-size:1.05rem;font-weight:700;margin:1.1em 0 .2em;padding-left:8px;border-left:3px solid var(--accent2)}
 pre.code{position:relative;background:#f5f6f7;border:1px solid var(--line);border-radius:10px;padding:14px 12px 12px;overflow:auto}
 pre.code .copy{position:absolute;top:8px;right:8px;border:1px solid var(--line);border-radius:var(--round);background:#fff;padding:.2em .6em;cursor:pointer;font:12px/1 var(--mono)}
-pre.code .copy.done{background:#e1f6f7;border-color:#b9ebc9}
+pre.code .copy.done{background:#e1f6e7;border-color:#b9ebc9}
+
 /* メモ */
 .note{background:#e7f1ff;border-radius:3px;padding:.05em .15em}
-.fab{position:fixed;z-index:65;display:none;min-width:40px;min-height:40px;border:1px solid var(--line);border-radius:var(--round);background:#fff;box-shadow:var(--shadow);align-items:center;justify-content:center;cursor:pointer}
+.fab{position:fixed;z-index:950;display:none;min-width:40px;min-height:40px;border:1px solid var(--line);border-radius:var(--round);background:#fff;box-shadow:var(--shadow);align-items:center;justify-content:center;cursor:pointer}
 .fab.show{display:flex}
-.pop{position:fixed;z-index:70;background:#fff;border:1px solid var(--line);border-radius:10px;box-shadow:var(--shadow);padding:10px;min-width:min(92vw,320px);max-width:min(96vw,420px);max-height:80dvh;overflow:auto}
+/* ポップアップは常に最前面に */
+.pop{position:fixed;z-index:1000;background:#fff;border:1px solid var(--line);border-radius:10px;box-shadow:var(--shadow);padding:10px;min-width:min(92vw,320px);max-width:min(96vw,420px);max-height:80dvh;overflow:auto}
 .pop h4{margin:.2em 0 .6em}
 .pop textarea{width:100%;min-height:110px;border:1px solid var(--line);border-radius:8px;padding:8px;font:13px/1.6 var(--mono)}
 .actions{display:flex;gap:10px;justify-content:space-between;margin-top:8px;flex-wrap:wrap}
@@ -129,7 +141,7 @@ const updIcon=()=>{ btnS.textContent=sea.classList.contains("open")?"▶":"◀";
 const setOpen=(el,on)=>{ el.classList.toggle("open",!!on); if(el===sea)updIcon(); if(on&&el===toc) sea.classList.remove("open"); };
 btnT.onclick=()=>setOpen(toc,!toc.classList.contains("open"));
 btnS.onclick=()=>setOpen(sea,!sea.classList.contains("open"));
-new MutationObserver(updIcon).observe(sea,{attributes:true,attributeFilter:["class"]}); updIcon();  /* 09061139 準拠 */  /*  [oai_citation:6‡09061139template2.html](file-service://file-M5WHpCRqQbQMhgcdUWWAak) */
+new MutationObserver(updIcon).observe(sea,{attributes:true,attributeFilter:["class"]}); updIcon();
 
 /* ==== ページ切替 ==== */
 tabs.forEach(b=>b.onclick=()=>switchPage(b.dataset.target));
@@ -138,7 +150,7 @@ function switchPage(p){
   pages.forEach(sec=>sec.setAttribute("aria-hidden",sec.dataset.page===p?"false":"true"));
   tabs.forEach(b=>b.setAttribute("aria-current",b.dataset.target===p?"page":"false"));
   S.page=p; buildTOC(); buildChips(); if(sea.classList.contains("open")) search();
-} /* 09061139 準拠 */  /*  [oai_citation:7‡09061139template2.html](file-service://file-M5WHpCRqQbQMhgcdUWWAak) */
+}
 
 /* ==== 見出し & 本文抽出（親本文のみ） ==== */
 function heads(sec){
@@ -179,7 +191,7 @@ function nearestHeading(el){
   return null;
 }
 
-/* ==== 文書順インデックス（メモ擬似エントリは note<span> を el に） ==== */
+/* ==== 文書順インデックス（メモは note<span> 自身を el に） ==== */
 function buildIndex(){
   S.index.clear(); S.tags.clear(); ID.clear();
   pages.forEach(sec=>{
@@ -215,7 +227,7 @@ function buildIndex(){
       }
     }
 
-    // order 未採番（見出しが非表示など）のフォールバック
+    // order 未採番のフォールバック
     es.forEach(e=>{ if(e.order===undefined){ e.order=order++; } });
 
     S.index.set(pg,es);
@@ -275,8 +287,19 @@ function search(){
     const tagOk=(tag==="all")||e.tags?.includes(tag)||(tag==="メモ"&&e.tags?.includes("メモ"));
     return ok&&tagOk;
   });
+
+  // ★ 重複抑制：見出し vs 子孫見出しのみ。メモは抑制に使わない
+  const byId=new Map(ALL.map(e=>[e.id,e]));
   const idset=new Set(hits.map(h=>h.id));
-  const filtered=hits.filter(e=>{ const d=e.descendants||new Set(); for(const c of d) if(idset.has(c)) return false; return true; });
+  const filtered=hits.filter(e=>{
+    const d=e.descendants||new Set();
+    for(const c of d){
+      const ce=byId.get(c);
+      if(ce && ce.kind!=="memo" && idset.has(c)) return false; // 子孫見出しが当たっているなら親を抑制
+    }
+    return true; // メモだけが当たっている場合は親見出しも残す
+  });
+
   render(filtered,ws,false);
 }
 function render(list,ws,preserve){
@@ -284,7 +307,7 @@ function render(list,ws,preserve){
   const arr = preserve ? list : list.slice().sort((a,b)=>{
     const po=(pageOrder.get(a.page)??9)-(pageOrder.get(b.page)??9);
     if(po!==0) return po;
-    return (a.order??1e9) - (b.order??1e9);  // ← 文書順
+    return (a.order??1e9) - (b.order??1e9);  // 文書順
   });
   arr.forEach(e=>{
     const card=document.createElement("div"); card.className="card";
@@ -295,7 +318,7 @@ function render(list,ws,preserve){
     const ttl=document.createElement("div"); ttl.className="title";
     const content=document.createElement("div"); content.className="content";
     const [head,tail]=headTail((e.kind==="memo"?(e.body||""):(e.body||e.scope)),30);
-    if(e.kind==="memo"){ ttl.textContent = e.sel || "（メモ）"; } else { ttl.textContent = e.text; }
+    if(e.kind==="memo"){ ttl.textContent = "［メモ］"+(e.sel?e.sel.slice(0,30):""); } else { ttl.textContent = e.text; }
     const prev=document.createElement("span"); prev.className="preview"; prev.textContent=head||"";
     const dots=document.createElement("span"); dots.className="dots"; dots.textContent=tail?"…":"";
     const contSpan=document.createElement("span"); contSpan.className="cont"; contSpan.textContent=tail||"";
@@ -320,7 +343,7 @@ function highlight(el,ws){
     const p=n.parentElement; if(p&&(p.closest("pre,code,.code")||p.classList.contains("note"))) return NodeFilter.FILTER_REJECT;
     return NodeFilter.FILTER_ACCEPT;
   }});
-  const re=new RegExp("("+ws.map(w=>w.replace(/[.*+?^${}()|[\\]\\\\]/g,"\\$&")).join("|")+")","ig");
+  const re=new RegExp("("+ws.map(w=>w.replace(/[.*+?^${}()|[\]\\]/g,"\\$&")).join("|")+")","ig");
   const targets=[]; while(walker.nextNode()){const n=walker.currentNode; if(re.test(n.nodeValue)) targets.push(n);}
   targets.forEach(n=>{
     const parts=n.nodeValue.split(re), f=document.createDocumentFragment();
@@ -329,17 +352,18 @@ function highlight(el,ws){
   });
 }
 
-/* ==== ジャンプ（メモはその選択位置へ） ==== */
+/* ==== ジャンプ（メモは選択位置へ） ==== */
 function jump(e,ws){
-  const go=()=>{ e.el.scrollIntoView({block:"start",behavior:"smooth"});
-    clearHL(); if(ws.length){ highlight(e.el,ws); ($(".hl-tmp")||e.el).scrollIntoView({block:"center",behavior:"smooth"}); }
-    if(MOBILE()){ setOpen(sea,false);} };
+  const go=()=>{ e.el.scrollIntoView({block:"center",behavior:"smooth"});
+    clearHL(); if(ws.length && e.kind!=="memo"){ highlight(e.el,ws); ($(".hl-tmp")||e.el).scrollIntoView({block:"center",behavior:"smooth"}); }
+    if(MOBILE()) setOpen(sea,false); };
   if(e.page!==S.page){
     switchPage(e.page);
     requestAnimationFrame(()=>{
-      const sec=pages.find(p=>p.dataset.page===e.page);
-      // 見出しなら id で補正、メモは el が span.note なのでそのまま
-      e.el = (e.kind==="memo") ? e.el : (sec.querySelector('[data-id="'+CSS.escape(e.id)+'"],#'+CSS.escape(e.id))||e.el);
+      if(e.kind!=="memo"){
+        const sec=pages.find(p=>p.dataset.page===e.page);
+        e.el=sec.querySelector('[data-id="'+CSS.escape(e.id)+'"],#'+CSS.escape(e.id))||e.el;
+      }
       go();
     });
   } else go();
@@ -415,9 +439,12 @@ function placePopup(el, anchorRect, pref="below"){
   el.style.left=x+"px"; el.style.top=y+"px";
 }
 
+/* ポップアップ：最前面＆自動フォーカス（触れない問題の対策） */
 function openNote({range,node}){
   closePop();
   const pop=document.createElement("div"); pop.className="pop"; popRef=pop;
+  pop.setAttribute("role","dialog"); pop.setAttribute("aria-modal","true"); pop.tabIndex=-1;
+
   const head=document.createElement("h4"); head.textContent=node?"メモを編集":"メモを追加";
   const prev=document.createElement("div"); prev.style="font-size:12px;color:#666"; prev.textContent="選択："+(node?node.textContent.slice(0,30):range.toString().slice(0,30));
   const ta=document.createElement("textarea"); if(node) ta.value=node.dataset.note||"";
@@ -425,20 +452,28 @@ function openNote({range,node}){
   const sv=document.createElement("button"); sv.className="btn primary"; sv.textContent="保存";
   const cn=document.createElement("button"); cn.className="btn"; cn.textContent="やめる";
   act.append(sv,cn);
-  if(node){ const del=document.createElement("button"); del.className="btn danger"; del.textContent="削除"; del.style.position="absolute"; del.style.right="10px"; del.style.top="10px";
-    del.onclick=()=>{ unwrap(node); closePop(); persistNotes(); buildIndex(); buildChips(); search(); };
+  if(node){
+    const del=document.createElement("button"); del.className="btn danger"; del.textContent="削除"; del.style.position="absolute"; del.style.right="10px"; del.style.top="10px";
+    del.onclick=(ev)=>{ ev.stopPropagation();
+      if(!confirm("このメモを削除します。よろしいですか？")) return;
+      unwrap(node);
+      closePop();
+      persistNotes(); buildIndex(); buildChips(); search();
+    };
     pop.append(del);
   }
   pop.append(head,prev,ta,act); document.body.appendChild(pop);
   const rect=(range?range.getBoundingClientRect():node.getBoundingClientRect());
-  requestAnimationFrame(()=>{ placePopup(pop, rect, "below"); });
+  requestAnimationFrame(()=>{ placePopup(pop, rect, "below"); pop.focus(); ta.focus(); });
   const off=(ev)=>{ if(pop && !pop.contains(ev.target)) closePop(); };
   setTimeout(()=>document.addEventListener("mousedown",off,{once:true}),0);
 
   cn.onclick=closePop;
   sv.onclick=()=>{
-    if(node){ node.dataset.note=ta.value.trim(); closePop(); persistNotes(); buildIndex(); buildChips(); search(); }
-    else{
+    if(node){
+      node.dataset.note=ta.value.trim();
+      closePop(); persistNotes(); buildIndex(); buildChips(); search();
+    }else{
       const span=document.createElement("span"); span.className="note"; span.dataset.note=ta.value.trim();
       try{ range.surroundContents(span);}catch{ const frag=range.extractContents(); span.appendChild(frag); range.insertNode(span); }
       span.addEventListener("click",e=>{e.stopPropagation(); openNote({node:span});});
@@ -468,32 +503,23 @@ function textBlocksUnderHeading(hEl){
   return arr;
 }
 function globalOffsetInBlock(block,targetSpan){
-  let offset=0, found=false;
+  let offset=0;
   const walker=document.createTreeWalker(block,NodeFilter.SHOW_TEXT,null);
-  while(walker.nextNode()){
-    const t=walker.currentNode;
-    if(targetSpan.contains(t)) { found=true; break; }
-    else if(targetSpan.compareDocumentPosition(t)&Node.DOCUMENT_POSITION_FOLLOWING){ offset += t.nodeValue.length; }
+  let n; while((n=walker.nextNode())){
+    if(targetSpan.contains(n)) break;
+    offset += n.nodeValue.length;
   }
-  if(!found){
-    const selText = targetSpan.textContent;
-    const pos = block.textContent.indexOf(selText);
+  if(!n){
+    const pos = block.textContent.indexOf(targetSpan.textContent);
     return pos>=0?pos:0;
   }
-  const beforeWalker=document.createTreeWalker(block,NodeFilter.SHOW_TEXT,null);
-  let pos=0;
-  while(beforeWalker.nextNode()){
-    const t=beforeWalker.currentNode;
-    if(targetSpan.contains(t)) break;
-    pos += t.nodeValue.length;
-  }
-  return pos;
+  return offset;
 }
 function surroundRangeByOffsets(block,start,len){
   const walker=document.createTreeWalker(block,NodeFilter.SHOW_TEXT,null);
-  let acc=0, startNode=null, startOff=0, endNode=null, endOff=0;
-  while(walker.nextNode()){
-    const t=walker.currentNode, L=t.nodeValue.length;
+  let acc=0, startNode=null, startOff=0, endNode=null, endOff=0, t;
+  while((t=walker.nextNode())){
+    const L=t.nodeValue.length;
     if(startNode===null && acc+L>=start){ startNode=t; startOff=start-acc; }
     if(startNode!==null && acc+L>=start+len){ endNode=t; endOff=start+len-acc; break; }
     acc+=L;
