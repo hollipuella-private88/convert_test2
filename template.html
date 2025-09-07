@@ -13,16 +13,24 @@
 }
 *{box-sizing:border-box} html,body{height:100%}
 body{margin:0;background:var(--bg);color:var(--text);font:16px/1.85 system-ui,-apple-system,"Segoe UI",Roboto,"Noto Sans JP","Yu Gothic UI","Meiryo",sans-serif}
-header{position:sticky;top:0;z-index:50;height:var(--header);display:grid;grid-template-columns:auto 1fr auto;align-items:center;padding:8px;border-bottom:1px solid var(--line);background:#fff}
+header{position:sticky;top:0;z-index:60;height:var(--header);display:grid;grid-template-columns:auto 1fr auto;align-items:center;padding:8px;border-bottom:1px solid var(--line);background:#fff}
 .title{text-align:center;font-weight:700}
 .icon{width:40px;height:40px;border:1px solid var(--line);border-radius:var(--round);background:#fff;display:grid;place-items:center;cursor:pointer}
 main{height:calc(100dvh - var(--header) - var(--tabs));overflow:auto;scroll-behavior:smooth;padding:16px min(6vw,28px) 120px}
 nav.tabs{position:sticky;bottom:0;height:var(--tabs);display:grid;grid-template-columns:repeat(3,1fr);border-top:1px solid var(--line);background:#fff;z-index:40}
 .tab{appearance:none;border:0;background:#fff;cursor:pointer}.tab[aria-current="page"]{background:var(--accent);font-weight:700}
 .page{display:none}.page[aria-hidden="false"]{display:block}
-/* ドロワー */
-aside.drawer{position:fixed;top:var(--header);bottom:0;width:var(--drawerW);background:#fff;border:1px solid var(--line);box-shadow:var(--shadow);overflow:auto;transform:translateX(-110%);transition:.25s}
-aside.drawer.right{right:0;left:auto;transform:translateX(110%)} aside.drawer.open{transform:translateX(0)}
+
+/* ドロワー（←ここ修正） */
+aside.drawer{
+  position:fixed;top:var(--header);bottom:0;left:0; /* left を明示 */
+  width:var(--drawerW);background:#fff;border:1px solid var(--line);
+  box-shadow:var(--shadow);overflow:auto;transform:translateX(-110%);transition:.25s;
+  z-index:70; /* ヘッダーより上に */
+}
+aside.drawer.right{right:0;left:auto;transform:translateX(110%)}
+aside.drawer.open{transform:translateX(0)}
+
 /* TOC */
 .toc{display:grid;grid-template-columns:110px 1fr;gap:8px;padding:8px}
 .toc .pages{border-right:1px solid var(--line);padding-right:8px}
@@ -31,6 +39,7 @@ aside.drawer.right{right:0;left:auto;transform:translateX(110%)} aside.drawer.op
 .toc .row{display:grid;grid-template-columns:24px 1fr;gap:6px;border-bottom:1px dashed #eee;padding:8px 4px}
 .toc .tw{cursor:pointer;color:#666}.tw.off{opacity:.25;pointer-events:none}
 .lvl2{padding-left:16px}.lvl3{padding-left:32px}
+
 /* 検索 */
 .searchbar{display:flex;gap:8px;padding:8px}.searchbar input{flex:1;border:1px solid var(--line);border-radius:var(--round);padding:.6em .8em}
 .chips{display:flex;gap:6px;flex-wrap:wrap;padding:0 8px 8px}
@@ -41,6 +50,7 @@ aside.drawer.right{right:0;left:auto;transform:translateX(110%)} aside.drawer.op
 .card .title{font-weight:700;margin:.2em 0}
 .card .content .cont{display:none}.card .content .dots{display:inline}
 .card.open .content .cont{display:inline}.card.open .content .dots{display:none}
+
 /* 見出し & コード */
 h1,h2,h3{scroll-margin-top:calc(var(--header) + 10px)}
 h1{text-align:center;font-size:1.6rem;font-weight:800;border-bottom:1px solid var(--line);padding-bottom:.4em;margin:1.2em 0 .8em}
@@ -49,11 +59,12 @@ h3{font-size:1.05rem;font-weight:700;margin:1.1em 0 .2em;padding-left:8px;border
 pre.code{position:relative;background:#f5f6f7;border:1px solid var(--line);border-radius:10px;padding:14px 12px 12px;overflow:auto}
 pre.code .copy{position:absolute;top:8px;right:8px;border:1px solid var(--line);border-radius:var(--round);background:#fff;padding:.2em .6em;cursor:pointer;font:12px/1 var(--mono)}
 pre.code .copy.done{background:#e1f6e7;border-color:#b9ebc9}
+
 /* メモ */
 .note{background:#e7f1ff;border-radius:3px;padding:.05em .15em}
-.fab{position:fixed;z-index:65;display:none;min-width:40px;min-height:40px;border:1px solid var(--line);border-radius:var(--round);background:#fff;box-shadow:var(--shadow);align-items:center;justify-content:center;cursor:pointer}
+.fab{position:fixed;z-index:75;display:none;min-width:40px;min-height:40px;border:1px solid var(--line);border-radius:var(--round);background:#fff;box-shadow:var(--shadow);align-items:center;justify-content:center;cursor:pointer}
 .fab.show{display:flex}
-.pop{position:fixed;z-index:70;background:#fff;border:1px solid var(--line);border-radius:10px;box-shadow:var(--shadow);padding:10px;min-width:min(92vw,320px);max-width:min(96vw,420px);max-height:80dvh;overflow:auto}
+.pop{position:fixed;z-index:80;background:#fff;border:1px solid var(--line);border-radius:10px;box-shadow:var(--shadow);padding:10px;min-width:min(92vw,320px);max-width:min(96vw,420px);max-height:80dvh;overflow:auto}
 .pop h4{margin:.2em 0 .6em}
 .pop textarea{width:100%;min-height:110px;border:1px solid var(--line);border-radius:8px;padding:8px;font:13px/1.6 var(--mono)}
 .actions{display:flex;gap:10px;justify-content:space-between;margin-top:8px;flex-wrap:wrap}
@@ -117,7 +128,9 @@ if(!/^[A-Za-z0-9_-]+$/.test(FIXED_KEY)){ alert("テンプレートの固定キ�
 const MEMO_KEY = "trpg:"+FIXED_KEY+":memos";
 
 /* ==== 状態 ==== */
-const S={page:"info",index:new Map(),tags:new Set()};
+/* 初期ページは aria-hidden="false" のセクションから拾う（←ここ重要） */
+const initPage = (pages.find(s=>s.getAttribute("aria-hidden")==="false")?.dataset.page) || "info";
+const S={page:initPage,index:new Map(),tags:new Set()};
 let ALL=[], ID=new Map();
 
 /* ==== ビューポート補助 ==== */
@@ -125,16 +138,19 @@ function vport(){const vv=window.visualViewport; return vv? {x:vv.offsetLeft,y:v
 const clamp=(v,min,max)=>Math.min(Math.max(v,min),max);
 
 /* ==== ヘッダーアイコン（閉:◀／開:▶） ==== */
-const updIcon=()=>{ btnS.textContent=sea.classList.contains("open")?"▶":"◀"; };
-const setOpen=(el,on)=>{ el.classList.toggle("open",!!on); if(el===sea)updIcon(); if(on&&el===toc) sea.classList.remove("open"); };
-btnT.onclick=()=>setOpen(toc,!toc.classList.contains("open"));
-btnS.onclick=()=>setOpen(sea,!sea.classList.contains("open"));
-new MutationObserver(updIcon).observe(sea,{attributes:true,attributeFilter:["class"]}); updIcon();
+const updIcon=()=>{ if(!btnS) return; btnS.textContent=sea.classList.contains("open")?"▶":"◀"; };
+const setOpen=(el,on)=>{ if(!el) return; el.classList.toggle("open",!!on); if(el===sea)updIcon(); if(on&&el===toc) sea.classList.remove("open"); };
+
+/* ボタンが無いケースを考慮して安全接続 */
+btnT && (btnT.onclick=()=>setOpen(toc,!toc.classList.contains("open")));
+btnS && (btnS.onclick=()=>setOpen(sea,!sea.classList.contains("open")));
+new MutationObserver(()=>updIcon()).observe(sea,{attributes:true,attributeFilter:["class"]});
+updIcon();
 
 /* ==== ページ切替 ==== */
-tabs.forEach(b=>b.onclick=()=>switchPage(b.dataset.target));
+tabs.forEach(b=> b && (b.onclick=()=>switchPage(b.dataset.target)));
 function switchPage(p){
-  if(S.page===p)return;
+  if(!p || S.page===p) return;
   pages.forEach(sec=>sec.setAttribute("aria-hidden",sec.dataset.page===p?"false":"true"));
   tabs.forEach(b=>b.setAttribute("aria-current",b.dataset.target===p?"page":"false"));
   S.page=p; buildTOC(); buildChips(); if(sea.classList.contains("open")) search();
@@ -227,13 +243,17 @@ function buildIndex(){
 
 /* ==== 目次 ==== */
 function buildTOC(){
-  const pcol=$("#tocPages"); pcol.innerHTML="";
-  ["info","main","etc"].forEach(n=>{const b=document.createElement("button"); b.textContent=n; b.setAttribute("aria-current",S.page===n&&"page"); b.onclick=()=>{switchPage(n); setOpen(toc,true)}; pcol.appendChild(b);});
+  const pcol=$("#tocPages"); if(!pcol) return; pcol.innerHTML="";
+  ["info","main","etc"].forEach(n=>{
+    const b=document.createElement("button"); b.textContent=n; b.setAttribute("aria-current",S.page===n&&"page");
+    b.onclick=()=>{switchPage(n); setOpen(toc,true)};
+    pcol.appendChild(b);
+  });
   const bm=document.createElement("button"); bm.textContent="memo"; bm.onclick=()=>{ renderMemoTOC(); setOpen(toc,true); }; pcol.appendChild(bm);
   renderTree();
 }
 function renderTree(){
-  const tree=$("#tocTree"); tree.innerHTML="";
+  const tree=$("#tocTree"); if(!tree) return; tree.innerHTML="";
   const sec=pages.find(p=>p.dataset.page===S.page), its=heads(sec), roots=its.filter(x=>x.l===1), open=new Set();
   const row=(it,isOpen)=>{
     const d=document.createElement("div"); d.className="row";
@@ -247,7 +267,8 @@ function renderTree(){
   render();
 }
 function renderMemoTOC(){
-  const tree=$("#tocTree"); tree.innerHTML="";
+  const tree=$("#tocTree"); if(!tree) return;
+  tree.innerHTML="";
   const row=document.createElement("div"); row.className="row"; row.innerHTML='<div class="tw off">•</div><div>全メモを削除</div>';
   row.onclick=()=>{ if(confirm("全メモを削除します。よろしいですか？")){ clearAllNotes(); buildIndex(); buildChips(); search(); renderTree(); alert("削除しました"); } };
   tree.appendChild(row);
@@ -255,18 +276,19 @@ function renderMemoTOC(){
 
 /* ==== 検索（AND、同階層本文、表示順＝文書順） ==== */
 const q=$("#q"); let composing=false; const debounce=(f,w=250)=>{let t;return(...a)=>{clearTimeout(t);t=setTimeout(()=>f(...a),w)}};
-q.addEventListener("compositionstart",()=>composing=true);
-q.addEventListener("compositionend",()=>{composing=false; search();});
-q.addEventListener("input",()=>{ if(!composing) debounce(search,250)(); });
-q.addEventListener("focus", clearHL);
+q && q.addEventListener("compositionstart",()=>composing=true);
+q && q.addEventListener("compositionend",()=>{composing=false; search();});
+q && q.addEventListener("input",()=>{ if(!composing) debounce(search,250)(); });
+q && q.addEventListener("focus", clearHL);
 function words(s){return (s||"").replace(/[　]/g," ").trim().split(/\s+/).filter(Boolean).map(w=>w.toLowerCase());}
 function buildChips(){
-  const wrap=$("#chips"); wrap.innerHTML=""; const tags=new Set(S.tags); tags.add("メモ");
+  const wrap=$("#chips"); if(!wrap) return; wrap.innerHTML=""; const tags=new Set(S.tags); tags.add("メモ");
   ["all",...Array.from(tags).sort((a,b)=>a.localeCompare(b,"ja"))].forEach(n=>{const b=document.createElement("button"); b.className="chip"+(n==="all"?" on":""); b.textContent=n; b.dataset.v=n; b.onclick=()=>{$$(".chip",wrap).forEach(c=>c.classList.toggle("on",c===b)); search();}; wrap.appendChild(b);});
 }
 const pageOrder = new Map([["info",0],["main",1],["etc",2]]);
 function search(){
-  const ws=words(q.value), tag=($(".chip.on")?.dataset.v)||"all", cont=$("#res"); cont.innerHTML="";
+  const cont=$("#res"); if(!cont) return; cont.innerHTML="";
+  const ws=words(q?.value||""), tag=($(".chip.on")?.dataset.v)||"all";
   if(tag==="all" && ws.length===0){
     const list=[...(S.index.get("info")||[]),...(S.index.get("main")||[]),...(S.index.get("etc")||[])]
       .filter(e=>!(e.kind==="memo"));
@@ -282,7 +304,7 @@ function search(){
   render(filtered,ws,false);
 }
 function render(list,ws,preserve){
-  const cont=$("#res");
+  const cont=$("#res"); if(!cont) return;
   const arr = preserve ? list : list.slice().sort((a,b)=>{
     const po=(pageOrder.get(a.page)??9)-(pageOrder.get(b.page)??9);
     if(po!==0) return po;
@@ -344,7 +366,6 @@ function jump(e,ws){
     requestAnimationFrame(()=>{
       if(e.kind==="memo"){
         const sec=pages.find(p=>p.dataset.page===e.page);
-        // 内容一致で近傍の .note を探す（同一選択が複数ある場合は最初）
         const cand=[...sec.querySelectorAll(".note")].find(n=>n.textContent.trim()===e.sel);
         if(cand) e.el=cand;
       }else{
@@ -410,7 +431,7 @@ function showFab(){ sel=getRange(); if(!sel){ fab.classList.remove("show"); retu
 sc.addEventListener("mouseup",()=>setTimeout(showFab,0));
 sc.addEventListener("touchend",()=>setTimeout(showFab,0));
 addEventListener("scroll",()=>fab.classList.remove("show"),{passive:true});
-fab.onclick=()=>{ if(!sel) return; openNote({range:sel}); fab.classList.remove("show"); getSelection().removeAllRanges(); };
+fab && (fab.onclick=()=>{ if(!sel) return; openNote({range:sel}); fab.classList.remove("show"); getSelection().removeAllRanges(); });
 
 function placePopup(el, anchorRect, pref="below"){
   const pad=8, vp=vport();
@@ -427,7 +448,6 @@ function placePopup(el, anchorRect, pref="below"){
   x = clamp(x, vp.x+pad, vp.x+vp.w-ew-pad);
   el.style.left=x+"px"; el.style.top=y+"px";
 }
-
 function openNote({range,node}){
   closePop();
   const pop=document.createElement("div"); pop.className="pop"; popRef=pop;
@@ -471,10 +491,10 @@ function closePop(){ if(popRef){ popRef.remove(); popRef=null; } }
 function unwrap(span){ const p=span.parentNode; while(span.firstChild) p.insertBefore(span.firstChild,span); p.removeChild(span); }
 function hookNotes(){ $$(".note",sc).forEach(n=>{ if(n._hooked) return; n.addEventListener("click",e=>{e.stopPropagation(); openNote({node:n});}); n._hooked=true; }); }
 
-/* ==== メモ保存：シリアライズ（親見出し＋ブロック番号＋オフセット） ==== */
+/* ==== メモ保存 ==== */
 function textBlocksUnderHeading(hEl){
   const L=hEl.tagName, arr=[];
-  let n=hEl; // 見出し自身もブロックとして 0 番
+  let n=hEl;
   while(n && n!==hEl.parentElement){
     if(n===hEl){ arr.push(hEl); n=n.nextSibling; continue; }
     if(!n) break;
@@ -551,9 +571,9 @@ function clearAllNotes(){
 }
 
 /* ==== 初期化 ==== */
-autoBoxCodes();            // プレーン<pre><code>→灰箱化
-restoreNotes();            // メモ復元
-hookNotes();               // 編集フック
+autoBoxCodes();
+restoreNotes();
+hookNotes();
 buildIndex(); buildChips();
 buildTOC(); search();
 linkNames(); updIcon();
