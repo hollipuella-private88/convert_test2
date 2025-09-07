@@ -179,7 +179,15 @@ function nearestHeading(el){
   return null;
 }
 
-/* ==== 索引（メモ擬似エントリ注入） ==== */
+/* ==== メモIDユーティリティ ==== */
+// ★ 各メモに恒久IDを付与（要素 id="memo:<id>" / dataset.noteId="<id>"）
+function ensureMemoId(span){
+  if(!span.dataset.noteId){ span.dataset.noteId = "m"+Math.random().toString(36).slice(2,10); }
+  if(!span.id){ span.id = "memo:"+span.dataset.noteId; }
+  return span.dataset.noteId;
+}
+
+/* ==== 索引（メモ＝実体位置を指す） ==== */
 function buildIndex(){
   S.index.clear(); S.tags.clear(); ID.clear();
   pages.forEach(sec=>{
@@ -190,20 +198,42 @@ function buildIndex(){
       const e={page:pg,id:it.id,lvl:it.l,text:it.text,scope,body,tags:[...new Set(it.tags)],parent:it.parent?.id||null,children:it.children.map(c=>c.id),el:it.el};
       es.push(e); byId.set(e.id,e); if(!ID.has(e.id)) ID.set(e.id,{text:e.text,page:pg,el:it.el});
     });
-    // 親→子孫
+
+    // 見出しの子孫リンク集合
     es.forEach(e=>{ let p=e.parent; while(p){ const pe=byId.get(p); (pe.descendants??=new Set()).add(e.id); p=pe.parent; }});
-    // メモ
+
+    // ★ メモ（span.note）を実要素として登録
     $$(".note",sec).forEach(span=>{
       const up=nearestHeading(span)||sec.querySelector("h1,h2,h3"); if(!up) return;
       const parent=es.find(x=>x.el===up); if(!parent) return;
+
+      ensureMemoId(span); // id付与
       if(!parent.tags.includes("メモ")) parent.tags.push("メモ");
       S.tags.add("メモ");
+
       const memoSel=span.textContent.trim(), memoBody=(span.dataset.note||"").trim();
-      const memoId=parent.id+"::memo::"+Math.random().toString(36).slice(2,8);
+      const memoId = span.id; // "memo:<id>"
       (parent.descendants??=new Set()).add(memoId);
-      es.push({kind:"memo",page:pg,id:memoId,lvl:3,scope:(memoSel+" "+memoBody).slice(0,400),
-        text:memoSel||"（メモ）", body:memoBody, sel:memoSel, tags:["メモ"], parent:parent.id, children:[], el:up, descendants:new Set()});
+
+      es.push({
+        kind:"memo",
+        page:pg,
+        id:memoId,               // メモ自体のID
+        lvl:3,
+        scope:(memoSel+" "+memoBody).slice(0,400),
+        text:memoSel||"（メモ）",
+        body:memoBody,
+        sel:memoSel,
+        tags:["メモ"],
+        parent:parent.id,
+        children:[],
+        el:span,                 // ★ ジャンプ先＝メモそのもの
+        descendants:new Set()
+      });
+
+      if(!ID.has(memoId)) ID.set(memoId,{text:memoSel||"（メモ）",page:pg,el:span});
     });
+
     S.index.set(pg,es);
   });
   ALL=[...S.index.get("info")||[],...S.index.get("main")||[],...S.index.get("etc")||[]];
@@ -237,7 +267,7 @@ function renderMemoTOC(){
   tree.appendChild(row);
 }
 
-/* ==== 検索（AND、同階層本文、表示順：info→main→etc→見出しレベル） ==== */
+/* ==== 検索（AND、同階層本文） ==== */
 const q=$("#q"); let composing=false; const debounce=(f,w=250)=>{let t;return(...a)=>{clearTimeout(t);t=setTimeout(()=>f(...a),w)}};
 q.addEventListener("compositionstart",()=>composing=true);
 q.addEventListener("compositionend",()=>{composing=false; search();});
@@ -262,7 +292,9 @@ function search(){
     return ok&&tagOk;
   });
   const idset=new Set(hits.map(h=>h.id));
-  const filtered=hits.filter(e=>{ const d=e.descendants||new Set(); for(const c of d) if(idset.has(c)) return false; return true; });
+  const filtered=hits.filter(e=>{
+    const d=e.descendants||new Set(); for(const c of d) if(idset.has(c)) return false; return true;
+  });
   render(filtered,ws,false);
 }
 function render(list,ws,preserve){
@@ -312,12 +344,37 @@ function highlight(el,ws){
     n.parentNode.replaceChild(f,n);
   });
 }
+
+/* ==== ジャンプ：見出し or メモ実体へ ==== */
+function flash(el){ // ★ 軽い視覚フィードバック
+  el.animate([{backgroundColor:"#fff3a0"},{backgroundColor:""}],{duration:800});
+}
 function jump(e,ws){
-  const go=()=>{ e.el.scrollIntoView({block:"start",behavior:"smooth"}); clearHL(); if(ws.length){ highlight(e.el,ws); ($(".hl-tmp")||e.el).scrollIntoView({block:"center",behavior:"smooth"}); } if(MOBILE()){ setOpen(sea,false);} };
-  if(e.page!==S.page){ switchPage(e.page); requestAnimationFrame(()=>{ const sec=pages.find(p=>p.dataset.page===e.page); e.el=sec.querySelector('[data-id="'+CSS.escape(e.id)+'"],#'+CSS.escape(e.id))||e.el; go(); }); } else go();
+  const go=(targetEl)=>{
+    targetEl.scrollIntoView({block:"center",behavior:"smooth"});
+    clearHL();
+    if(ws.length){ highlight(targetEl,ws); ($(".hl-tmp")||targetEl).scrollIntoView({block:"center",behavior:"smooth"}); }
+    flash(targetEl);
+    if(MOBILE()){ setOpen(sea,false); }
+  };
+  // ★ メモは span.note 自体へ
+  if(e.kind==="memo" && e.el){
+    const targetPage = e.page;
+    const act=()=>go(e.el);
+    if(targetPage!==S.page){ switchPage(targetPage); requestAnimationFrame(act); } else act();
+    return;
+  }
+  // 見出しは従来どおり
+  const ent=ID.get(e.id); if(!ent) return;
+  const targetPage = e.page || ent.page;
+  const act=()=>{ const sec=pages.find(p=>p.dataset.page===targetPage);
+    e.el=(sec.querySelector('[data-id="'+CSS.escape(e.id)+'"],#'+CSS.escape(e.id))||ent.el);
+    go(e.el);
+  };
+  if(targetPage!==S.page){ switchPage(targetPage); requestAnimationFrame(act);} else act();
 }
 
-/* ==== コードコピー（ボタン表記：copy） ==== */
+/* ==== コードコピー ==== */
 document.addEventListener("click",async e=>{
   const b=e.target.closest(".code .copy"); if(!b) return;
   const code=b.parentElement.querySelector("code").innerText;
@@ -344,11 +401,14 @@ addEventListener("hashchange",()=>{
   const ent=ID.get(id); if(!ent) return;
   const targetPage = page || ent.page;
   const act=()=>{ const sec=pages.find(p=>p.dataset.page===targetPage);
-    (sec.querySelector('[data-id="'+CSS.escape(id)+'"],#'+CSS.escape(id))||ent.el).scrollIntoView({block:"start",behavior:"smooth"}); };
+    const el = sec.querySelector('#'+CSS.escape(id)) || sec.querySelector('[data-id="'+CSS.escape(id)+'"]') || ent.el;
+    el.scrollIntoView({block:"center",behavior:"smooth"});
+    flash(el);
+  };
   if(targetPage!==S.page){ switchPage(targetPage); requestAnimationFrame(act);} else act();
 });
 
-/* ==== メモ（見出しも可） ==== */
+/* ==== メモ ==== */
 const fab=$("#fab"); let sel=null, popRef=null;
 function blockOf(n){return (n.nodeType===1?n:n.parentElement)?.closest("h1,h2,h3,p,li,blockquote,pre,dd,td,div");}
 function getRange(){
@@ -397,8 +457,9 @@ function openNote({range,node}){
   const sv=document.createElement("button"); sv.className="btn primary"; sv.textContent="保存";
   const cn=document.createElement("button"); cn.className="btn"; cn.textContent="やめる";
   act.append(sv,cn);
-  if(node){ const del=document.createElement("button"); del.className="btn danger"; del.textContent="削除"; del.style.position="absolute"; del.style.right="10px"; del.style.top="10px";
-    del.onclick=()=>{ unwrap(node); closePop(); persistNotes(); buildIndex(); buildChips(); search(); };
+  if(node){
+    const del=document.createElement("button"); del.className="btn danger"; del.textContent="削除"; del.style.position="absolute"; del.style.right="10px"; del.style.top="10px";
+    del.onclick=()=>{ unwrap(node); closePop(); persistNotes(); buildIndex(); buildChips(); search(); }; // ★ 確実に保存→索引再構築
     pop.append(del);
   }
   pop.append(head,prev,ta,act); document.body.appendChild(pop);
@@ -409,10 +470,14 @@ function openNote({range,node}){
 
   cn.onclick=closePop;
   sv.onclick=()=>{
-    if(node){ node.dataset.note=ta.value.trim(); closePop(); persistNotes(); buildIndex(); buildChips(); search(); }
-    else{
+    if(node){
+      node.dataset.note=ta.value.trim();
+      ensureMemoId(node);                        // ★ 編集時もIDを保証
+      closePop(); persistNotes(); buildIndex(); buildChips(); search();
+    }else{
       const span=document.createElement("span"); span.className="note"; span.dataset.note=ta.value.trim();
       try{ range.surroundContents(span);}catch{ const frag=range.extractContents(); span.appendChild(frag); range.insertNode(span); }
+      ensureMemoId(span);                         // ★ 新規作成時にID付与
       span.addEventListener("click",e=>{e.stopPropagation(); openNote({node:span});});
       closePop(); persistNotes(); buildIndex(); buildChips(); search();
     }
@@ -420,9 +485,9 @@ function openNote({range,node}){
 }
 function closePop(){ if(popRef){ popRef.remove(); popRef=null; } }
 function unwrap(span){ const p=span.parentNode; while(span.firstChild) p.insertBefore(span.firstChild,span); p.removeChild(span); }
-function hookNotes(){ $$(".note",sc).forEach(n=>{ if(n._hooked) return; n.addEventListener("click",e=>{e.stopPropagation(); openNote({node:n});}); n._hooked=true; }); }
+function hookNotes(){ $$(".note",sc).forEach(n=>{ if(n._hooked) return; ensureMemoId(n); n.addEventListener("click",e=>{e.stopPropagation(); openNote({node:n});}); n._hooked=true; }); }
 
-/* ==== メモ保存：シリアライズ（親見出し＋ブロック番号＋オフセット） ==== */
+/* ==== メモ保存：シリアライズ ==== */
 function textBlocksUnderHeading(hEl){
   const L=hEl.tagName, arr=[];
   let n=hEl; // 見出し自身もブロックとして 0 番
@@ -440,26 +505,14 @@ function textBlocksUnderHeading(hEl){
   return arr;
 }
 function globalOffsetInBlock(block,targetSpan){
-  let offset=0, found=false;
+  let offset=0;
   const walker=document.createTreeWalker(block,NodeFilter.SHOW_TEXT,null);
   while(walker.nextNode()){
     const t=walker.currentNode;
-    if(targetSpan.contains(t)) { found=true; break; }
-    else if(targetSpan.compareDocumentPosition(t)&Node.DOCUMENT_POSITION_FOLLOWING){ offset += t.nodeValue.length; }
-  }
-  if(!found){
-    const selText = targetSpan.textContent;
-    const pos = block.textContent.indexOf(selText);
-    return pos>=0?pos:0;
-  }
-  const beforeWalker=document.createTreeWalker(block,NodeFilter.SHOW_TEXT,null);
-  let pos=0;
-  while(beforeWalker.nextNode()){
-    const t=beforeWalker.currentNode;
     if(targetSpan.contains(t)) break;
-    pos += t.nodeValue.length;
+    offset += t.nodeValue.length;
   }
-  return pos;
+  return offset;
 }
 function surroundRangeByOffsets(block,start,len){
   const walker=document.createTreeWalker(block,NodeFilter.SHOW_TEXT,null);
@@ -484,8 +537,14 @@ function persistNotes(){
       const hid=h.dataset.id||h.id; if(!hid) return;
       const blocks=textBlocksUnderHeading(h); const blk=blockOf(span);
       const bIndex=blocks.indexOf(blk); if(bIndex<0) return;
+      ensureMemoId(span); // ★ ID確保
       const start=globalOffsetInBlock(blk,span); const length=span.textContent.length;
-      memos.push({page,hid,bIndex,start,length,body:span.dataset.note||"",sel:span.textContent});
+      memos.push({
+        id:span.dataset.noteId,       // ★ 恒久ID
+        page,hid,bIndex,start,length,
+        body:span.dataset.note||"",
+        sel:span.textContent
+      });
     });
   });
   try{ localStorage.setItem(MEMO_KEY, JSON.stringify(memos)); }catch{}
@@ -498,7 +557,7 @@ function restoreNotes(){
     const h=sec.querySelector('[data-id="'+CSS.escape(m.hid)+'"],#'+CSS.escape(m.hid)); if(!h) return;
     const blocks=textBlocksUnderHeading(h); const blk=blocks[m.bIndex]; if(!blk) return;
     const r=surroundRangeByOffsets(blk,m.start,m.length); if(!r) return;
-    const span=document.createElement("span"); span.className="note"; span.dataset.note=m.body;
+    const span=document.createElement("span"); span.className="note"; span.dataset.note=m.body; span.dataset.noteId=m.id; span.id="memo:"+m.id; // ★ ID復元
     try{ r.surroundContents(span); }catch{ const frag=r.extractContents(); span.appendChild(frag); r.insertNode(span); }
     span.addEventListener("click",e=>{e.stopPropagation(); openNote({node:span});});
   });
@@ -512,8 +571,8 @@ function clearAllNotes(){
 
 /* ==== 初期化 ==== */
 autoBoxCodes();            // プレーン<pre><code>→灰箱化
-restoreNotes();            // メモ復元
-hookNotes();               // 編集フック
+restoreNotes();            // メモ復元（IDも復元）
+hookNotes();               // 編集フック（ID保証）
 buildIndex(); buildChips();
 buildTOC(); search();
 linkNames(); updIcon();
