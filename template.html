@@ -30,6 +30,7 @@ aside.drawer{
 }
 aside.drawer.right{right:0;left:auto;transform:translateX(110%)}
 aside.drawer.open{transform:translateX(0)}
+
 /* TOC */
 .toc{display:grid;grid-template-columns:110px 1fr;gap:8px;padding:8px}
 .toc .pages{border-right:1px solid var(--line);padding-right:8px}
@@ -59,10 +60,12 @@ pre.code{position:relative;background:#f5f6f7;border:1px solid var(--line);borde
 pre.code .copy{position:absolute;top:8px;right:8px;border:1px solid var(--line);border-radius:var(--round);background:#fff;padding:.2em .6em;cursor:pointer;font:12px/1 var(--mono)}
 pre.code .copy.done{background:#e1f6e7;border-color:#b9ebc9}
 
-/* メモ */
+/* メモ（FAB・ポップアップ） */
 .note{background:#e7f1ff;border-radius:3px;padding:.05em .15em}
 .fab{position:fixed;z-index:950;display:none;min-width:40px;min-height:40px;border:1px solid var(--line);border-radius:var(--round);background:#fff;box-shadow:var(--shadow);align-items:center;justify-content:center;cursor:pointer}
 .fab.show{display:flex}
+/* モーダルのバックドロップとポップアップを最前面に */
+.backdrop{position:fixed;inset:0;background:rgba(0,0,0,.15);z-index:995}
 .pop{position:fixed;z-index:1000;background:#fff;border:1px solid var(--line);border-radius:10px;box-shadow:var(--shadow);padding:10px;min-width:min(92vw,320px);max-width:min(96vw,420px);max-height:80dvh;overflow:auto}
 .pop h4{margin:.2em 0 .6em}
 .pop textarea{width:100%;min-height:110px;border:1px solid var(--line);border-radius:8px;padding:8px;font:13px/1.6 var(--mono)}
@@ -161,30 +164,14 @@ function heads(sec){
   return hs;
 }
 
-/* ==== text extraction for "担当本文" (exclude .note) ==== */
+/* ==== text extraction for "担当本文" (.note 完全除外) ==== */
 function textUnder(node, stopAtTags){
-  // その要素配下のテキストを TreeWalker で取得（.note 内は除外）
   const stop=new Set(stopAtTags);
-  const walker=document.createTreeWalker(node,NodeFilter.SHOW_ELEMENT|NodeFilter.SHOW_TEXT,{
-    acceptNode(n){
-      if(n.nodeType===1){
-        const el=n;
-        if(el.matches("h1,h2,h3")) return NodeFilter.FILTER_REJECT;
-        if(el.closest(".note")) return NodeFilter.FILTER_REJECT; // ★ メモ除外
-        return NodeFilter.FILTER_SKIP; // 子をたどる
-      }
-      if(n.parentElement && n.parentElement.closest(".note")) return NodeFilter.FILTER_REJECT; // ★ メモ除外
-      return NodeFilter.FILTER_ACCEPT;
-    }
-  });
-  let s="";
-  let curr=node.nextSibling;
-  // 次の同階層見出し直前まで（子の本文は除外）
+  let s=""; let curr=node.nextSibling;
   while(curr){
     if(curr.nodeType===1){
       const tn=curr.tagName;
       if((tn==="H1"&&stop.has("H1"))||(tn==="H2"&&stop.has("H2"))||(tn==="H3"&&stop.has("H3"))) break;
-      // curr の中身を note 除外で抽出
       s += " " + extractTextExcludingNote(curr);
     }else if(curr.nodeType===3){
       s += " " + curr.nodeValue.trim();
@@ -196,7 +183,7 @@ function textUnder(node, stopAtTags){
     const tw=document.createTreeWalker(root,NodeFilter.SHOW_TEXT,{acceptNode(n){
       const p=n.parentElement;
       if(!n.nodeValue.trim()) return NodeFilter.FILTER_REJECT;
-      if(p && p.closest(".note")) return NodeFilter.FILTER_REJECT; // ★ メモ除外
+      if(p && p.closest(".note")) return NodeFilter.FILTER_REJECT;
       return NodeFilter.FILTER_ACCEPT;
     }});
     while(tw.nextNode()) out += " " + tw.currentNode.nodeValue.trim();
@@ -205,8 +192,7 @@ function textUnder(node, stopAtTags){
   return s.replace(/\s+/g," ").trim();
 }
 function bodyText(h){
-  const L=h.tagName; // H1/H2/H3
-  // 同階層の次の見出しに当たるまで、.note を除外して本文を集める
+  const L=h.tagName;
   if(L==="H1") return textUnder(h,["H1","H2","H3"]);
   if(L==="H2") return textUnder(h,["H2","H3"]);
   return textUnder(h,["H3"]);
@@ -226,23 +212,20 @@ function nearestHeading(el){
   return null;
 }
 
-/* ==== index (document order; memo is its own entry; NO "メモ" tag on headings) ==== */
+/* ==== index: 文書順; メモは独立エントリ; 見出しには「メモ」タグ付与しない ==== */
 function buildIndex(){
   S.index.clear(); S.tags.clear(); ID.clear();
   pages.forEach(sec=>{
     const pg=sec.dataset.page, its=heads(sec), es=[], byId=new Map();
     its.forEach(it=>{
-      const body=bodyText(it.el);               // ★ note除外済み
+      const body=bodyText(it.el);
       const scope=(it.text+" "+body).trim();
-      it.tags.forEach(t=>S.tags.add(t));        // 見出しのタグのみ登録（メモはここで付与しない）
+      it.tags.forEach(t=>S.tags.add(t));
       const e={page:pg,id:it.id,lvl:it.l,text:it.text,scope,body,tags:[...new Set(it.tags)],
-               parent:it.parent?.id||null,children:it.children.map(c=>c.id),el:it.el, order:undefined};
+               parent:it.parent?.id||null,children:it.children.map(c=>c.id),el:it.el,order:undefined};
       es.push(e); byId.set(e.id,e); if(!ID.has(e.id)) ID.set(e.id,{text:e.text,page:pg,el:it.el});
     });
-    // 親→子孫リンク
     es.forEach(e=>{ let p=e.parent; while(p){ const pe=byId.get(p); (pe.descendants??=new Set()).add(e.id); p=pe.parent; }});
-
-    // 文書順に order 付与 & メモ挿入
     let order=0;
     const tw=document.createTreeWalker(sec,NodeFilter.SHOW_ELEMENT,null);
     while(tw.nextNode()){
@@ -254,8 +237,7 @@ function buildIndex(){
       if(n.matches && n.matches("span.note")){
         const up=nearestHeading(n)||sec.querySelector("h1,h2,h3"); if(!up) continue;
         const parent=es.find(x=>x.el===up); if(!parent) continue;
-        // 見出しに「メモ」タグは付与しない（仕様）
-        S.tags.add("メモ"); // チップ用に存在だけ登録
+        S.tags.add("メモ"); // チップに表示するためだけ
         const memoSel=n.textContent.trim(), memoBody=(n.dataset.note||"").trim();
         const memoId=parent.id+"::memo::"+Math.random().toString(36).slice(2,8);
         (parent.descendants??=new Set()).add(memoId);
@@ -297,7 +279,7 @@ function renderMemoTOC(){
   tree.appendChild(row);
 }
 
-/* ==== search (AND; 文書順; 重複抑制=見出しvs子孫見出しのみ) ==== */
+/* ==== search (AND; 文書順; 重複抑制=見出しvs子孫見出しのみ; メモは抑制対象外) ==== */
 const q=$("#q"); let composing=false; const debounce=(f,w=250)=>{let t;return(...a)=>{clearTimeout(t);t=setTimeout(()=>f(...a),w)}};
 q.addEventListener("compositionstart",()=>composing=true);
 q.addEventListener("compositionend",()=>{composing=false; search();});
@@ -306,9 +288,9 @@ q.addEventListener("focus", clearHL);
 function words(s){return (s||"").replace(/[　]/g," ").trim().split(/\s+/).filter(Boolean).map(w=>w.toLowerCase());}
 function buildChips(){
   const wrap=$("#chips"); wrap.innerHTML="";
-  const tags=new Set(S.tags); tags.add("メモ"); // メモは固有タグとして提示
+  const tags=new Set(S.tags); tags.add("メモ"); // メモは固有タグ
   ["all",...Array.from(tags).sort((a,b)=>a.localeCompare(b,"ja"))].forEach(n=>{
-    const b=document.createElement("button"); b.className="chip"+(n==="all"?" on":""); b.textContent=n; b.dataset.v=n;
+    const b=document.createElement("button"); b.type="button"; b.className="chip"+(n==="all"?" on":""); b.textContent=n; b.dataset.v=n;
     b.onclick=()=>{$$(".chip",wrap).forEach(c=>c.classList.toggle("on",c===b)); search();};
     wrap.appendChild(b);
   });
@@ -323,11 +305,9 @@ function search(){
   }
   const hits=ALL.filter(e=>{
     const ok=ws.every(w=>(e.scope||"").toLowerCase().includes(w));
-    const tagOk=(tag==="all") || (e.tags?.includes(tag)); // 「メモ」タグはメモにのみ付く
+    const tagOk=(tag==="all") || (e.tags?.includes(tag)); // 「メモ」はメモのみ
     return ok && tagOk;
   });
-
-  // 重複抑制：見出し vs 子孫見出しのみ（メモは抑制に使わない）
   const byId=new Map(ALL.map(e=>[e.id,e]));
   const idset=new Set(hits.map(h=>h.id));
   const filtered=hits.filter(e=>{
@@ -338,7 +318,6 @@ function search(){
     }
     return true;
   });
-
   render(filtered,ws,false);
 }
 function render(list,ws,preserve){
@@ -352,7 +331,7 @@ function render(list,ws,preserve){
     const card=document.createElement("div"); card.className="card";
     const meta=document.createElement("div"); meta.className="meta";
     const bc=document.createElement("div"); bc.textContent=crumb(e);
-    const jb=document.createElement("button"); jb.textContent="ジャンプ"; jb.className="btn"; jb.onclick=(ev)=>{ev.stopPropagation(); jump(e,ws);};
+    const jb=document.createElement("button"); jb.type="button"; jb.textContent="ジャンプ"; jb.className="btn"; jb.onclick=(ev)=>{ev.stopPropagation(); jump(e,ws);};
     meta.append(bc,jb);
     const ttl=document.createElement("div"); ttl.className="title";
     const content=document.createElement("div"); content.className="content";
@@ -435,7 +414,7 @@ addEventListener("hashchange",()=>{
 });
 
 /* ==== notes ==== */
-const fab=$("#fab"); let sel=null, popRef=null;
+const fab=$("#fab"); let sel=null, popRef=null, backdropRef=null;
 function blockOf(n){return (n.nodeType===1?n:n.parentElement)?.closest("h1,h2,h3,p,li,blockquote,pre,dd,td,div");}
 function getRange(){
   const s=getSelection(); if(!s||s.isCollapsed) return null;
@@ -459,41 +438,73 @@ function placePopup(el,anchorRect,pref="below"){
   if(y+eh>vp.y+vp.h-pad||y<vp.y+pad) y=vp.y+(vp.h-eh)/2;
   x=clamp(x,vp.x+pad,vp.x+vp.w-ew-pad); el.style.left=x+"px"; el.style.top=y+"px";
 }
+
+/* ★ モーダル（バックドロップ＋ポップアップ）— pointer 系で完全制御 */
 function openNote({range,node}){
   closePop();
+
+  backdropRef=document.createElement("div");
+  backdropRef.className="backdrop";
+  backdropRef.addEventListener("pointerdown",(ev)=>{ if(ev.target===backdropRef) closePop(); });
+  document.body.appendChild(backdropRef);
+
   const pop=document.createElement("div"); pop.className="pop"; popRef=pop;
   pop.setAttribute("role","dialog"); pop.setAttribute("aria-modal","true"); pop.tabIndex=-1;
+
+  // ポップアップ内の操作が外へ伝播しないように
+  ["pointerdown","pointerup","click"].forEach(evName=>{
+    pop.addEventListener(evName,(ev)=>ev.stopPropagation());
+  });
+
   const head=document.createElement("h4"); head.textContent=node?"メモを編集":"メモを追加";
-  const prev=document.createElement("div"); prev.style="font-size:12px;color:#666"; prev.textContent="選択："+(node?node.textContent.slice(0,30):range.toString().slice(0,30));
+  const prev=document.createElement("div"); prev.style.cssText="font-size:12px;color:#666"; prev.textContent="選択："+(node?node.textContent.slice(0,30):range.toString().slice(0,30));
+
   const ta=document.createElement("textarea"); if(node) ta.value=node.dataset.note||"";
+  ta.spellcheck=false; ta.autocomplete="off"; ta.autocapitalize="off";
+
   const act=document.createElement("div"); act.className="actions";
-  const sv=document.createElement("button"); sv.className="btn primary"; sv.textContent="保存";
-  const cn=document.createElement("button"); cn.className="btn"; cn.textContent="やめる";
+  const sv=document.createElement("button"); sv.type="button"; sv.className="btn primary"; sv.textContent="保存";
+  const cn=document.createElement("button"); cn.type="button"; cn.className="btn"; cn.textContent="やめる";
   act.append(sv,cn);
+
   if(node){
-    const del=document.createElement("button"); del.className="btn danger"; del.textContent="削除"; del.style.position="absolute"; del.style.right="10px"; del.style.top="10px";
-    del.onclick=(ev)=>{ ev.stopPropagation(); if(!confirm("このメモを削除します。よろしいですか？")) return;
-      unwrap(node); closePop(); persistNotes(); buildIndex(); buildChips(); search(); };
+    const del=document.createElement("button"); del.type="button"; del.className="btn danger"; del.textContent="削除";
+    del.style.position="absolute"; del.style.right="10px"; del.style.top="10px";
+    del.addEventListener("click",(ev)=>{
+      ev.stopPropagation();
+      if(!confirm("このメモを削除します。よろしいですか？")) return;
+      unwrap(node);
+      closePop();
+      persistNotes(); buildIndex(); buildChips(); search();
+    });
     pop.append(del);
   }
-  pop.append(head,prev,ta,act); document.body.appendChild(pop);
+
+  pop.append(head,prev,ta,act);
+  document.body.appendChild(pop);
+
   const rect=(range?range.getBoundingClientRect():node.getBoundingClientRect());
   requestAnimationFrame(()=>{ placePopup(pop,rect,"below"); pop.focus(); ta.focus(); });
-  const off=(ev)=>{ if(pop && !pop.contains(ev.target)) closePop(); }; setTimeout(()=>document.addEventListener("mousedown",off,{once:true}),0);
-  cn.onclick=closePop;
+
+  cn.onclick=()=>closePop();
   sv.onclick=()=>{
-    if(node){ node.dataset.note=ta.value.trim(); closePop(); persistNotes(); buildIndex(); buildChips(); search(); }
-    else{
+    if(node){
+      node.dataset.note=ta.value.trim();
+      closePop(); persistNotes(); buildIndex(); buildChips(); search();
+    }else{
       const span=document.createElement("span"); span.className="note"; span.dataset.note=ta.value.trim();
       try{ range.surroundContents(span);}catch{ const frag=range.extractContents(); span.appendChild(frag); range.insertNode(span); }
-      span.addEventListener("click",e=>{e.stopPropagation(); openNote({node:span});});
+      span.addEventListener("click",(e)=>{e.stopPropagation(); openNote({node:span});});
       closePop(); persistNotes(); buildIndex(); buildChips(); search();
     }
   };
 }
-function closePop(){ if(popRef){ popRef.remove(); popRef=null; } }
+function closePop(){
+  if(popRef){ popRef.remove(); popRef=null; }
+  if(backdropRef){ backdropRef.remove(); backdropRef=null; }
+}
 function unwrap(span){ const p=span.parentNode; while(span.firstChild) p.insertBefore(span.firstChild,span); p.removeChild(span); }
-function hookNotes(){ $$(".note",sc).forEach(n=>{ if(n._hooked) return; n.addEventListener("click",e=>{e.stopPropagation(); openNote({node:n});}); n._hooked=true; }); }
+function hookNotes(){ $$(".note",sc).forEach(n=>{ if(n._hooked) return; n.addEventListener("click",(e)=>{e.stopPropagation(); openNote({node:n});}); n._hooked=true; }); }
 
 /* ==== memo persist/restore ==== */
 function textBlocksUnderHeading(hEl){
@@ -554,7 +565,7 @@ function restoreNotes(){
     const r=surroundRangeByOffsets(blk,m.start,m.length); if(!r) return;
     const span=document.createElement("span"); span.className="note"; span.dataset.note=m.body;
     try{ r.surroundContents(span); }catch{ const frag=r.extractContents(); span.appendChild(frag); r.insertNode(span); }
-    span.addEventListener("click",e=>{e.stopPropagation(); openNote({node:span});});
+    span.addEventListener("click",(e)=>{e.stopPropagation(); openNote({node:span});});
   });
 }
 
