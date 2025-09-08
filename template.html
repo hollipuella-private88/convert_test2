@@ -60,11 +60,10 @@ pre.code{position:relative;background:#f5f6f7;border:1px solid var(--line);borde
 pre.code .copy{position:absolute;top:8px;right:8px;border:1px solid var(--line);border-radius:var(--round);background:#fff;padding:.2em .6em;cursor:pointer;font:12px/1 var(--mono)}
 pre.code .copy.done{background:#e1f6e7;border-color:#b9ebc9}
 
-/* メモ（FAB・ポップアップ） */
+/* メモ（FAB・モーダル） */
 .note{background:#e7f1ff;border-radius:3px;padding:.05em .15em}
 .fab{position:fixed;z-index:950;display:none;min-width:40px;min-height:40px;border:1px solid var(--line);border-radius:var(--round);background:#fff;box-shadow:var(--shadow);align-items:center;justify-content:center;cursor:pointer}
 .fab.show{display:flex}
-/* モーダルのバックドロップとポップアップを最前面に */
 .backdrop{position:fixed;inset:0;background:rgba(0,0,0,.15);z-index:995}
 .pop{position:fixed;z-index:1000;background:#fff;border:1px solid var(--line);border-radius:10px;box-shadow:var(--shadow);padding:10px;min-width:min(92vw,320px);max-width:min(96vw,420px);max-height:80dvh;overflow:auto}
 .pop h4{margin:.2em 0 .6em}
@@ -112,39 +111,42 @@ mark.hl{background:#fff3a0}
 <aside id="sea" class="drawer right" aria-label="検索">
   <div class="searchbar"><input id="q" placeholder="空白区切り AND（全ページ）"></div>
   <div id="chips" class="chips"></div>
-  <div id="res"></div>
+  <div id="res" aria-live="polite"></div>
 </aside>
 
 <button id="fab" class="fab" title="メモを追加">＋</button>
 
 <script>
 (()=>{"use strict";
-/* ==== util ==== */
+
+/* ========= 基本ユーティリティ ========= */
 const $=(s,r=document)=>r.querySelector(s), $$=(s,r=document)=>Array.from(r.querySelectorAll(s));
 const sc=$("#sc"), pages=$$(".page"), tabs=$$(".tab"), toc=$("#toc"), sea=$("#sea"), btnT=$("#btnToc"), btnS=$("#btnSearch");
 const MOBILE=()=>matchMedia("(max-width:768px)").matches;
+const clamp=(v,min,max)=>Math.min(Math.max(v,min),max);
+const vport=()=>{const vv=visualViewport; return vv?{x:vv.offsetLeft,y:vv.offsetTop,w:vv.width,h:vv.height}:{x:0,y:0,w:innerWidth,h:innerHeight};};
 
-/* ==== keys ==== */
+/* ========= 固定キー／ストレージ ========= */
 const FIXED_KEY=(document.querySelector('meta[name="trpg-key"]')?.content||"").trim();
 if(!/^[A-Za-z0-9_-]+$/.test(FIXED_KEY)) alert("テンプレートの固定キー(meta[name=trpg-key])が不正です。");
 const MEMO_KEY="trpg:"+FIXED_KEY+":memos";
 
-/* ==== state ==== */
+/* ========= 状態 ========= */
 const S={page:"info",index:new Map(),tags:new Set()};
-let ALL=[], ID=new Map();
+let ALL=[], ENT=new Map(), ID=new Map(); // ENT: id->entry
+let TAG_SIG="";
 
-/* ==== viewport helpers ==== */
-function vport(){const vv=visualViewport; return vv?{x:vv.offsetLeft,y:vv.offsetTop,w:vv.width,h:vv.height}:{x:0,y:0,w:innerWidth,h:innerHeight};}
-const clamp=(v,min,max)=>Math.min(Math.max(v,min),max);
-
-/* ==== drawers ==== */
+/* ========= 共通関数 ========= */
+const pageOrder=new Map([["info",0],["main",1],["etc",2]]);
+const cmpDocOrder=(a,b)=>{const po=(pageOrder.get(a.page)??9)-(pageOrder.get(b.page)??9); return po!==0?po:(a.order??1e9)-(b.order??1e9);};
+const debounce=(f,w=250)=>{let t; return (...a)=>{clearTimeout(t); t=setTimeout(()=>f(...a), w)};};
 const updIcon=()=>{ btnS.textContent=sea.classList.contains("open")?"▶":"◀"; };
-const setOpen=(el,on)=>{ el.classList.toggle("open",!!on); if(el===sea)updIcon(); if(on&&el===toc) sea.classList.remove("open"); };
+const setOpen=(el,on)=>{ el.classList.toggle("open",!!on); if(el===sea) updIcon(); if(on&&el===toc) sea.classList.remove("open"); };
 btnT.onclick=()=>setOpen(toc,!toc.classList.contains("open"));
 btnS.onclick=()=>setOpen(sea,!sea.classList.contains("open"));
-new MutationObserver(updIcon).observe(sea,{attributes:true,attributeFilter:["class"]}); updIcon();
+updIcon();
 
-/* ==== tabs ==== */
+/* ========= タブ切替 ========= */
 tabs.forEach(b=>b.onclick=()=>switchPage(b.dataset.target));
 function switchPage(p){
   if(S.page===p)return;
@@ -153,7 +155,7 @@ function switchPage(p){
   S.page=p; buildTOC(); buildChips(); if(sea.classList.contains("open")) search();
 }
 
-/* ==== heading structure ==== */
+/* ========= 章構造抽出 ========= */
 function heads(sec){
   const hs=$$("h1,h2,h3",sec).map(h=>{
     if(h.dataset.id&&!h.id)h.id=h.dataset.id;
@@ -164,41 +166,33 @@ function heads(sec){
   return hs;
 }
 
-/* ==== text extraction for "担当本文" (.note 完全除外) ==== */
-function textUnder(node, stopAtTags){
-  const stop=new Set(stopAtTags);
-  let s=""; let curr=node.nextSibling;
-  while(curr){
-    if(curr.nodeType===1){
-      const tn=curr.tagName;
-      if((tn==="H1"&&stop.has("H1"))||(tn==="H2"&&stop.has("H2"))||(tn==="H3"&&stop.has("H3"))) break;
-      s += " " + extractTextExcludingNote(curr);
-    }else if(curr.nodeType===3){
-      s += " " + curr.nodeValue.trim();
-    }
-    curr=curr.nextSibling;
-  }
-  function extractTextExcludingNote(root){
-    let out="";
-    const tw=document.createTreeWalker(root,NodeFilter.SHOW_TEXT,{acceptNode(n){
-      const p=n.parentElement;
-      if(!n.nodeValue.trim()) return NodeFilter.FILTER_REJECT;
-      if(p && p.closest(".note")) return NodeFilter.FILTER_REJECT;
-      return NodeFilter.FILTER_ACCEPT;
-    }});
-    while(tw.nextNode()) out += " " + tw.currentNode.nodeValue.trim();
-    return out;
+/* ========= テキスト抽出（.note 完全除外） ========= */
+function collectText(root,{excludeNotes=true}={}){
+  let out=""; const tw=document.createTreeWalker(root,NodeFilter.SHOW_TEXT,{acceptNode(n){
+    if(!n.nodeValue.trim()) return NodeFilter.FILTER_REJECT;
+    const p=n.parentElement;
+    if(p && p.closest("pre,code,.code")) return NodeFilter.FILTER_REJECT;
+    if(excludeNotes && p && p.closest(".note")) return NodeFilter.FILTER_REJECT;
+    return NodeFilter.FILTER_ACCEPT;
+  }});
+  while(tw.nextNode()) out+=" "+tw.currentNode.nodeValue.trim();
+  return out.replace(/\s+/g," ").trim();
+}
+function walkUntilNextPeer(h){
+  const L=h.tagName, stop=L==="H1"?/^(H1|H2|H3)$/:L==="H2"?/^(H2|H3)$/:/^H3$/;
+  let s="", n=h.nextSibling;
+  while(n){
+    if(n.nodeType===1){
+      if(stop.test(n.tagName)) break;
+      s+=" "+collectText(n,{excludeNotes:true}); // ★ メモは本文から除外
+    }else if(n.nodeType===3){ s+=" "+n.nodeValue.trim(); }
+    n=n.nextSibling;
   }
   return s.replace(/\s+/g," ").trim();
 }
-function bodyText(h){
-  const L=h.tagName;
-  if(L==="H1") return textUnder(h,["H1","H2","H3"]);
-  if(L==="H2") return textUnder(h,["H2","H3"]);
-  return textUnder(h,["H3"]);
-}
+const bodyText=h=>walkUntilNextPeer(h);
 
-/* ==== nearest heading ==== */
+/* ========= 近傍見出し ========= */
 function nearestHeading(el){
   let n=(el.nodeType===1?el:el.parentElement);
   while(n){ if(n.matches&&n.matches("h1,h2,h3")) return n; n=n.parentElement; }
@@ -212,50 +206,55 @@ function nearestHeading(el){
   return null;
 }
 
-/* ==== index: 文書順; メモは独立エントリ; 見出しには「メモ」タグ付与しない ==== */
+/* ========= インデックス作成（単一ループ＋文書順＋メモ独立） ========= */
 function buildIndex(){
   S.index.clear(); S.tags.clear(); ID.clear();
   pages.forEach(sec=>{
     const pg=sec.dataset.page, its=heads(sec), es=[], byId=new Map();
     its.forEach(it=>{
-      const body=bodyText(it.el);
-      const scope=(it.text+" "+body).trim();
-      it.tags.forEach(t=>S.tags.add(t));
+      const body=bodyText(it.el), scope=(it.text+" "+body).trim();
+      it.tags.forEach(t=>S.tags.add(t)); // 見出しタグのみ
       const e={page:pg,id:it.id,lvl:it.l,text:it.text,scope,body,tags:[...new Set(it.tags)],
                parent:it.parent?.id||null,children:it.children.map(c=>c.id),el:it.el,order:undefined};
       es.push(e); byId.set(e.id,e); if(!ID.has(e.id)) ID.set(e.id,{text:e.text,page:pg,el:it.el});
     });
-    es.forEach(e=>{ let p=e.parent; while(p){ const pe=byId.get(p); (pe.descendants??=new Set()).add(e.id); p=pe.parent; }});
+    // 親→子孫リンク
+    es.forEach(e=>{let p=e.parent; while(p){const pe=byId.get(p); (pe.descendants??=new Set()).add(e.id); p=pe.parent;}});
+    // 文書順に order 付与 & メモ挿入
+    const elements=sec.querySelectorAll("h1,h2,h3,span.note");
     let order=0;
-    const tw=document.createTreeWalker(sec,NodeFilter.SHOW_ELEMENT,null);
-    while(tw.nextNode()){
-      const n=tw.currentNode;
-      if(n.matches && n.matches("h1,h2,h3")){
-        const id=n.dataset.id||n.id; const ent=byId.get(id);
-        if(ent && ent.order===undefined){ ent.order=order++; }
-      }
-      if(n.matches && n.matches("span.note")){
-        const up=nearestHeading(n)||sec.querySelector("h1,h2,h3"); if(!up) continue;
-        const parent=es.find(x=>x.el===up); if(!parent) continue;
-        S.tags.add("メモ"); // チップに表示するためだけ
-        const memoSel=n.textContent.trim(), memoBody=(n.dataset.note||"").trim();
+    elements.forEach(el=>{
+      if(el.matches("h1,h2,h3")){
+        const id=el.dataset.id||el.id; const ent=byId.get(id);
+        if(ent && ent.order===undefined) ent.order=order++;
+      }else{ // span.note
+        const up=nearestHeading(el)||sec.querySelector("h1,h2,h3"); if(!up) return;
+        const parent=es.find(x=>x.el===up); if(!parent) return;
+        S.tags.add("メモ"); // チップ表示用（見出しには付与しない）
+        const memoSel=el.textContent.trim(), memoBody=(el.dataset.note||"").trim();
         const memoId=parent.id+"::memo::"+Math.random().toString(36).slice(2,8);
         (parent.descendants??=new Set()).add(memoId);
         es.push({kind:"memo",page:pg,id:memoId,lvl:3,scope:(memoSel+" "+memoBody).slice(0,400),
-          text:memoSel||"（メモ）", body:memoBody, sel:memoSel, tags:["メモ"], parent:parent.id, children:[], el:n, descendants:new Set(), order:order++});
+          text:memoSel||"（メモ）", body:memoBody, sel:memoSel, tags:["メモ"], parent:parent.id, children:[], el, descendants:new Set(), order:order++});
       }
-    }
-    es.forEach(e=>{ if(e.order===undefined){ e.order=order++; } });
+    });
+    es.forEach(e=>{if(e.order===undefined) e.order=order++;});
     S.index.set(pg,es);
   });
-  ALL=[...S.index.get("info")||[],...S.index.get("main")||[],...S.index.get("etc")||[]];
+  ALL=[...(S.index.get("info")||[]),...(S.index.get("main")||[]),...(S.index.get("etc")||[])];
+  ENT=new Map(ALL.map(e=>[e.id,e]));
 }
 
-/* ==== TOC ==== */
+/* ========= TOC ========= */
 function buildTOC(){
   const pcol=$("#tocPages"); pcol.innerHTML="";
-  ["info","main","etc"].forEach(n=>{const b=document.createElement("button"); b.textContent=n; b.setAttribute("aria-current",S.page===n&&"page"); b.onclick=()=>{switchPage(n); setOpen(toc,true)}; pcol.appendChild(b);});
-  const bm=document.createElement("button"); bm.textContent="memo"; bm.onclick=()=>{ renderMemoTOC(); setOpen(toc,true); }; pcol.appendChild(bm);
+  ["info","main","etc"].forEach(n=>{
+    const b=document.createElement("button"); b.textContent=n;
+    if(S.page===n) b.setAttribute("aria-current","page");
+    b.onclick=()=>{switchPage(n); setOpen(toc,true)}; pcol.appendChild(b);
+  });
+  const bm=document.createElement("button"); bm.textContent="memo";
+  bm.onclick=()=>{ renderMemoTOC(); setOpen(toc,true); }; pcol.appendChild(bm);
   renderTree();
 }
 function renderTree(){
@@ -279,72 +278,106 @@ function renderMemoTOC(){
   tree.appendChild(row);
 }
 
-/* ==== search (AND; 文書順; 重複抑制=見出しvs子孫見出しのみ; メモは抑制対象外) ==== */
-const q=$("#q"); let composing=false; const debounce=(f,w=250)=>{let t;return(...a)=>{clearTimeout(t);t=setTimeout(()=>f(...a),w)}};
+/* ========= 検索 ========= */
+const q=$("#q"); let composing=false;
 q.addEventListener("compositionstart",()=>composing=true);
 q.addEventListener("compositionend",()=>{composing=false; search();});
 q.addEventListener("input",()=>{ if(!composing) debounce(search,250)(); });
 q.addEventListener("focus", clearHL);
-function words(s){return (s||"").replace(/[　]/g," ").trim().split(/\s+/).filter(Boolean).map(w=>w.toLowerCase());}
+const words=s=>(s||"").replace(/[　]/g," ").trim().split(/\s+/).filter(Boolean).map(w=>w.toLowerCase());
+
 function buildChips(){
+  const tags=new Set(S.tags); tags.add("メモ");
+  const sig=JSON.stringify([...tags].sort());
+  if(sig===TAG_SIG && $("#chips").children.length) return;
+  TAG_SIG=sig;
   const wrap=$("#chips"); wrap.innerHTML="";
-  const tags=new Set(S.tags); tags.add("メモ"); // メモは固有タグ
-  ["all",...Array.from(tags).sort((a,b)=>a.localeCompare(b,"ja"))].forEach(n=>{
-    const b=document.createElement("button"); b.type="button"; b.className="chip"+(n==="all"?" on":""); b.textContent=n; b.dataset.v=n;
-    b.onclick=()=>{$$(".chip",wrap).forEach(c=>c.classList.toggle("on",c===b)); search();};
+  ["all",...JSON.parse(sig)].forEach(n=>{
+    const b=document.createElement("button");
+    b.className="chip"+(n==="all"?" on":""); b.textContent=n; b.dataset.v=n; b.type="button";
+    b.onclick=()=>{$$("#chips .chip").forEach(c=>c.classList.toggle("on",c===b)); search();};
     wrap.appendChild(b);
   });
 }
-const pageOrder=new Map([["info",0],["main",1],["etc",2]]);
+
 function search(){
-  const ws=words(q.value), tag=($(".chip.on")?.dataset.v)||"all", cont=$("#res"); cont.innerHTML="";
+  const ws=words(q.value), tag=($(".chip.on")?.dataset.v)||"all", cont=$("#res");
+  cont.innerHTML="";
+  // 全件（all＆空検索）は見出しのみを表示
   if(tag==="all" && ws.length===0){
     const list=[...(S.index.get("info")||[]),...(S.index.get("main")||[]),...(S.index.get("etc")||[])]
-      .filter(e=>!(e.kind==="memo"));
-    return render(list,[],true);
+      .filter(e=>e.kind!=="memo");
+    return renderVirtual(list,[],true);
   }
+  // AND検索
   const hits=ALL.filter(e=>{
     const ok=ws.every(w=>(e.scope||"").toLowerCase().includes(w));
-    const tagOk=(tag==="all") || (e.tags?.includes(tag)); // 「メモ」はメモのみ
+    const tagOk=(tag==="all") || (e.tags?.includes(tag)); // 「メモ」はメモ専用タグ
     return ok && tagOk;
   });
-  const byId=new Map(ALL.map(e=>[e.id,e]));
+  // 見出し vs 子孫見出しの重複抑制（メモは抑制対象外）
   const idset=new Set(hits.map(h=>h.id));
   const filtered=hits.filter(e=>{
     const d=e.descendants||new Set();
-    for(const c of d){
-      const ce=byId.get(c);
-      if(ce && ce.kind!=="memo" && idset.has(c)) return false;
-    }
+    for(const c of d){ const ce=ENT.get(c); if(ce && ce.kind!=="memo" && idset.has(c)) return false; }
     return true;
   });
-  render(filtered,ws,false);
+  renderVirtual(filtered,ws,false);
 }
-function render(list,ws,preserve){
+
+/* ========= 簡易 Virtualize（100件ずつ段階描画） ========= */
+const BATCH=100;
+function renderVirtual(list,ws,preserve){
   const cont=$("#res");
-  const arr = preserve ? list : list.slice().sort((a,b)=>{
-    const po=(pageOrder.get(a.page)??9)-(pageOrder.get(b.page)??9);
-    if(po!==0) return po;
-    return (a.order??1e9)-(b.order??1e9);
-  });
-  arr.forEach(e=>{
-    const card=document.createElement("div"); card.className="card";
-    const meta=document.createElement("div"); meta.className="meta";
-    const bc=document.createElement("div"); bc.textContent=crumb(e);
-    const jb=document.createElement("button"); jb.type="button"; jb.textContent="ジャンプ"; jb.className="btn"; jb.onclick=(ev)=>{ev.stopPropagation(); jump(e,ws);};
-    meta.append(bc,jb);
-    const ttl=document.createElement("div"); ttl.className="title";
-    const content=document.createElement("div"); content.className="content";
-    const [head,tail]=headTail((e.kind==="memo"?(e.body||""):(e.body||e.scope)),30);
-    ttl.textContent = (e.kind==="memo" ? "［メモ］"+(e.sel?e.sel.slice(0,30):"") : e.text);
-    const prev=document.createElement("span"); prev.className="preview"; prev.textContent=head||"";
-    const dots=document.createElement("span"); dots.className="dots"; dots.textContent=tail?"…":"";
-    const contSpan=document.createElement("span"); contSpan.className="cont"; contSpan.textContent=tail||"";
-    content.append(prev,dots,contSpan);
-    card.onclick=()=>card.classList.toggle("open");
-    card.append(meta,ttl,content); cont.appendChild(card);
-  });
+  const arr = preserve ? list : list.slice().sort(cmpDocOrder);
+  if(arr.length===0){ cont.textContent="該当なし"; return; }
+
+  const frag=document.createDocumentFragment();
+  const sentinel=document.createElement("div"); // 末尾監視用
+  sentinel.style.height="1px";
+  cont.appendChild(sentinel);
+
+  let i=0;
+  function renderBatch(){
+    const end=Math.min(i+BATCH,arr.length);
+    const df=document.createDocumentFragment();
+    for(; i<end; i++){
+      df.appendChild(makeCard(arr[i], ws));
+    }
+    cont.insertBefore(df, sentinel);
+    if(i<arr.length){
+      schedule(renderBatch);
+    }else{
+      sentinel.remove();
+    }
+  }
+  // 初回即描画
+  renderBatch();
 }
+const schedule=typeof requestIdleCallback==="function"
+  ? (fn)=>requestIdleCallback(()=>fn(),{timeout:200})
+  : (fn)=>setTimeout(fn,0);
+
+function makeCard(e, ws){
+  const card=document.createElement("div"); card.className="card";
+  const meta=document.createElement("div"); meta.className="meta";
+  const bc=document.createElement("div"); bc.textContent=crumb(e);
+  const jb=document.createElement("button"); jb.type="button"; jb.textContent="ジャンプ"; jb.className="btn"; jb.onclick=(ev)=>{ev.stopPropagation(); jump(e,ws);};
+  meta.append(bc,jb);
+  const ttl=document.createElement("div"); ttl.className="title";
+  const content=document.createElement("div"); content.className="content";
+  const src=(e.kind==="memo"?(e.body||""):(e.body||e.scope));
+  const [head,tail]=headTail(src,30);
+  ttl.textContent = (e.kind==="memo" ? "［メモ］"+(e.sel?e.sel.slice(0,30):"") : e.text);
+  const prev=document.createElement("span"); prev.className="preview"; prev.textContent=head||"";
+  const dots=document.createElement("span"); dots.className="dots"; dots.textContent=tail?"…":"";
+  const contSpan=document.createElement("span"); contSpan.className="cont"; contSpan.textContent=tail||"";
+  content.append(prev,dots,contSpan);
+  card.onclick=()=>card.classList.toggle("open");
+  card.append(meta,ttl,content);
+  return card;
+}
+
 function headTail(s,n){if(!s)return["",""];const a=Array.from(s);return[a.slice(0,n).join(""),a.slice(n).join("")];}
 function crumb(e){
   const es=S.index.get(e.page)||[]; if(e.lvl===1) return e.page;
@@ -353,16 +386,16 @@ function crumb(e){
   return e.page+" ＞ "+(p2?.text||"")+" ＞ "+(p?.text||"");
 }
 
-/* ==== highlight ==== */
+/* ========= 検索ハイライト ========= */
 function clearHL(){ $$(".hl-tmp",sc).forEach(m=>m.replaceWith(document.createTextNode(m.textContent))); }
 function highlight(el,ws){
-  const walker=document.createTreeWalker(el.closest("section")||sc,NodeFilter.SHOW_TEXT,{acceptNode(n){
+  const tw=document.createTreeWalker(el.closest("section")||sc,NodeFilter.SHOW_TEXT,{acceptNode(n){
     if(!n.nodeValue.trim())return NodeFilter.FILTER_REJECT;
     const p=n.parentElement; if(p&&(p.closest("pre,code,.code")||p.classList.contains("note"))) return NodeFilter.FILTER_REJECT;
     return NodeFilter.FILTER_ACCEPT;
   }});
-  const re=new RegExp("("+ws.map(w=>w.replace(/[.*+?^${}()|[\]\\]/g,"\\$&")).join("|")+")","ig");
-  const targets=[]; while(walker.nextNode()){const n=walker.currentNode; if(re.test(n.nodeValue)) targets.push(n);}
+  const re=new RegExp("("+ws.map(w=>w.replace(/[.*+?^${}()|[\\]\\\\]/g,"\\$&")).join("|")+")","ig");
+  const targets=[]; while(tw.nextNode()){const n=tw.currentNode; if(re.test(n.nodeValue)) targets.push(n);}
   targets.forEach(n=>{
     const parts=n.nodeValue.split(re), f=document.createDocumentFragment();
     parts.forEach(t=>{ if(!t) return; if(ws.some(w=>t.toLowerCase()===w.toLowerCase())){ const m=document.createElement("mark"); m.className="hl-tmp"; m.textContent=t; f.appendChild(m);} else f.appendChild(document.createTextNode(t));});
@@ -370,7 +403,7 @@ function highlight(el,ws){
   });
 }
 
-/* ==== jump (memo → span.note へ) ==== */
+/* ========= ジャンプ（メモは選択位置へ） ========= */
 function jump(e,ws){
   const go=()=>{ e.el.scrollIntoView({block:"center",behavior:"smooth"});
     clearHL(); if(ws.length && e.kind!=="memo"){ highlight(e.el,ws); ($(".hl-tmp")||e.el).scrollIntoView({block:"center",behavior:"smooth"}); }
@@ -388,14 +421,14 @@ function jump(e,ws){
   } else go();
 }
 
-/* ==== copy ==== */
+/* ========= コードコピー ========= */
 document.addEventListener("click",async e=>{
   const b=e.target.closest(".code .copy"); if(!b) return;
   const code=b.parentElement.querySelector("code").innerText;
   try{ await navigator.clipboard.writeText(code); b.classList.add("done"); b.textContent="copied ✓"; setTimeout(()=>{b.classList.remove("done"); b.textContent="copy";},900);}catch{ alert("copy failed"); }
 });
 
-/* ==== hash links ==== */
+/* ========= ハッシュリンク名補完 ========= */
 function parseHash(h){ const raw=decodeURIComponent(h.replace(/^#/,"")); if(!raw) return {id:"",page:null}; const m=raw.match(/^([a-zA-Z0-9_-]+):(.*)$/); return m?{page:m[1],id:m[2]}:{page:null,id:raw}; }
 function linkNames(){
   $$('a[href^="#"]',sc).forEach(a=>{
@@ -413,7 +446,7 @@ addEventListener("hashchange",()=>{
   if(targetPage!==S.page){ switchPage(targetPage); requestAnimationFrame(act);} else act();
 });
 
-/* ==== notes ==== */
+/* ========= メモ（追加／編集／削除） ========= */
 const fab=$("#fab"); let sel=null, popRef=null, backdropRef=null;
 function blockOf(n){return (n.nodeType===1?n:n.parentElement)?.closest("h1,h2,h3,p,li,blockquote,pre,dd,td,div");}
 function getRange(){
@@ -424,8 +457,7 @@ function getRange(){
 }
 function placeFab(el,rect){ const vp=vport(),pad=8,ew=el.offsetWidth||40,eh=el.offsetHeight||40; let x=rect.left+rect.width/2+(scrollX||0)-ew/2; let y=rect.top+(scrollY||0)-48; x=clamp(x,vp.x+pad,vp.x+vp.w-ew-pad); y=clamp(y,vp.y+pad,vp.y+vp.h-eh-pad); el.style.left=x+"px"; el.style.top=y+"px";}
 function showFab(){ sel=getRange(); if(!sel){ fab.classList.remove("show"); return; } const r=sel.getBoundingClientRect(); fab.classList.add("show"); placeFab(fab,r); }
-sc.addEventListener("mouseup",()=>setTimeout(showFab,0));
-sc.addEventListener("touchend",()=>setTimeout(showFab,0));
+sc.addEventListener("pointerup",()=>setTimeout(showFab,0),{passive:true});
 addEventListener("scroll",()=>fab.classList.remove("show"),{passive:true});
 fab.onclick=()=>{ if(!sel) return; openNote({range:sel}); fab.classList.remove("show"); getSelection().removeAllRanges(); };
 
@@ -439,7 +471,6 @@ function placePopup(el,anchorRect,pref="below"){
   x=clamp(x,vp.x+pad,vp.x+vp.w-ew-pad); el.style.left=x+"px"; el.style.top=y+"px";
 }
 
-/* ★ モーダル（バックドロップ＋ポップアップ）— pointer 系で完全制御 */
 function openNote({range,node}){
   closePop();
 
@@ -450,18 +481,11 @@ function openNote({range,node}){
 
   const pop=document.createElement("div"); pop.className="pop"; popRef=pop;
   pop.setAttribute("role","dialog"); pop.setAttribute("aria-modal","true"); pop.tabIndex=-1;
-
-  // ポップアップ内の操作が外へ伝播しないように
-  ["pointerdown","pointerup","click"].forEach(evName=>{
-    pop.addEventListener(evName,(ev)=>ev.stopPropagation());
-  });
+  ["pointerdown","pointerup","click"].forEach(ev=>pop.addEventListener(ev,e=>e.stopPropagation()));
 
   const head=document.createElement("h4"); head.textContent=node?"メモを編集":"メモを追加";
   const prev=document.createElement("div"); prev.style.cssText="font-size:12px;color:#666"; prev.textContent="選択："+(node?node.textContent.slice(0,30):range.toString().slice(0,30));
-
-  const ta=document.createElement("textarea"); if(node) ta.value=node.dataset.note||"";
-  ta.spellcheck=false; ta.autocomplete="off"; ta.autocapitalize="off";
-
+  const ta=document.createElement("textarea"); if(node) ta.value=node.dataset.note||""; ta.spellcheck=false; ta.autocomplete="off"; ta.autocapitalize="off";
   const act=document.createElement("div"); act.className="actions";
   const sv=document.createElement("button"); sv.type="button"; sv.className="btn primary"; sv.textContent="保存";
   const cn=document.createElement("button"); cn.type="button"; cn.className="btn"; cn.textContent="やめる";
@@ -473,24 +497,19 @@ function openNote({range,node}){
     del.addEventListener("click",(ev)=>{
       ev.stopPropagation();
       if(!confirm("このメモを削除します。よろしいですか？")) return;
-      unwrap(node);
-      closePop();
-      persistNotes(); buildIndex(); buildChips(); search();
+      unwrap(node); closePop(); persistNotes(); buildIndex(); buildChips(); search();
     });
     pop.append(del);
   }
 
-  pop.append(head,prev,ta,act);
-  document.body.appendChild(pop);
-
+  pop.append(head,prev,ta,act); document.body.appendChild(pop);
   const rect=(range?range.getBoundingClientRect():node.getBoundingClientRect());
   requestAnimationFrame(()=>{ placePopup(pop,rect,"below"); pop.focus(); ta.focus(); });
 
   cn.onclick=()=>closePop();
   sv.onclick=()=>{
     if(node){
-      node.dataset.note=ta.value.trim();
-      closePop(); persistNotes(); buildIndex(); buildChips(); search();
+      node.dataset.note=ta.value.trim(); closePop(); persistNotes(); buildIndex(); buildChips(); search();
     }else{
       const span=document.createElement("span"); span.className="note"; span.dataset.note=ta.value.trim();
       try{ range.surroundContents(span);}catch{ const frag=range.extractContents(); span.appendChild(frag); range.insertNode(span); }
@@ -499,14 +518,11 @@ function openNote({range,node}){
     }
   };
 }
-function closePop(){
-  if(popRef){ popRef.remove(); popRef=null; }
-  if(backdropRef){ backdropRef.remove(); backdropRef=null; }
-}
+function closePop(){ if(popRef){ popRef.remove(); popRef=null; } if(backdropRef){ backdropRef.remove(); backdropRef=null; } }
 function unwrap(span){ const p=span.parentNode; while(span.firstChild) p.insertBefore(span.firstChild,span); p.removeChild(span); }
 function hookNotes(){ $$(".note",sc).forEach(n=>{ if(n._hooked) return; n.addEventListener("click",(e)=>{e.stopPropagation(); openNote({node:n});}); n._hooked=true; }); }
 
-/* ==== memo persist/restore ==== */
+/* ========= メモ永続化 ========= */
 function textBlocksUnderHeading(hEl){
   const L=hEl.tagName, arr=[]; let n=hEl;
   while(n && n!==hEl.parentElement){
@@ -522,22 +538,23 @@ function textBlocksUnderHeading(hEl){
   }
   return arr;
 }
+function blockOf(n){return (n.nodeType===1?n:n.parentElement)?.closest("h1,h2,h3,p,li,blockquote,pre,dd,td,div");}
 function globalOffsetInBlock(block,targetSpan){
-  let offset=0; const walker=document.createTreeWalker(block,NodeFilter.SHOW_TEXT,null); let n;
-  while((n=walker.nextNode())){ if(targetSpan.contains(n)) break; offset+=n.nodeValue.length; }
-  if(!n){ const pos=block.textContent.indexOf(targetSpan.textContent); return pos>=0?pos:0; }
+  let offset=0; const tw=document.createTreeWalker(block,NodeFilter.SHOW_TEXT,null); let t;
+  while((t=tw.nextNode())){ if(targetSpan.contains(t)) break; offset+=t.nodeValue.length; }
+  if(!t){ const pos=block.textContent.indexOf(targetSpan.textContent); return pos>=0?pos:0; }
   return offset;
 }
 function surroundRangeByOffsets(block,start,len){
-  const walker=document.createTreeWalker(block,NodeFilter.SHOW_TEXT,null);
-  let acc=0,startNode=null,startOff=0,endNode=null,endOff=0,t;
-  while((t=walker.nextNode())){ const L=t.nodeValue.length;
-    if(startNode===null && acc+L>=start){ startNode=t; startOff=start-acc; }
-    if(startNode!==null && acc+L>=start+len){ endNode=t; endOff=start+len-acc; break; }
+  const tw=document.createTreeWalker(block,NodeFilter.SHOW_TEXT,null);
+  let acc=0,sn=null,so=0,en=null,eo=0,t;
+  while((t=tw.nextNode())){ const L=t.nodeValue.length;
+    if(sn===null && acc+L>=start){ sn=t; so=start-acc; }
+    if(sn!==null && acc+L>=start+len){ en=t; eo=start+len-acc; break; }
     acc+=L;
   }
-  if(!startNode) return null; if(!endNode){ endNode=startNode; endOff=startOff+len; }
-  const r=document.createRange(); r.setStart(startNode,startOff); r.setEnd(endNode,endOff); return r;
+  if(!sn) return null; if(!en){ en=sn; eo=so+len; }
+  const r=document.createRange(); r.setStart(sn,so); r.setEnd(en,eo); return r;
 }
 function persistNotes(){
   hookNotes();
@@ -569,22 +586,19 @@ function restoreNotes(){
   });
 }
 
-/* ==== clear all notes ==== */
-function clearAllNotes(){
-  pages.forEach(sec=>{ $$(".note",sec).forEach(unwrap); });
-  try{ localStorage.removeItem(MEMO_KEY);}catch{}
-}
+/* ========= 全メモ削除 ========= */
+function clearAllNotes(){ pages.forEach(sec=>{ $$(".note",sec).forEach(unwrap); }); try{ localStorage.removeItem(MEMO_KEY);}catch{} }
 
-/* ==== init ==== */
+/* ========= コードボックス化 ========= */
+function autoBoxCodes(){ $$("pre:not(.code)>code",sc).forEach(c=>{const p=c.parentElement;p.classList.add("code");const b=document.createElement("button");b.className="copy";b.textContent="copy";p.insertBefore(b,c);}); }
+
+/* ========= 初期化 ========= */
 autoBoxCodes();
 restoreNotes();
 hookNotes();
 buildIndex(); buildChips();
 buildTOC(); search();
 linkNames(); updIcon();
-
-/* ==== misc ==== */
-function autoBoxCodes(){ $$("pre:not(.code)>code",sc).forEach(c=>{const p=c.parentElement;p.classList.add("code");const b=document.createElement("button");b.className="copy";b.textContent="copy";p.insertBefore(b,c);}); }
 
 })();
 </script>
