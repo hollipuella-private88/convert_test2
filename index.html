@@ -13,7 +13,6 @@ textarea{width:100%;min-height:38vh;padding:10px;border:1px solid #ddd;border-ra
 button{border:1px solid #ccc;border-radius:8px;background:#fff;padding:.5em .9em;cursor:pointer}
 .out{min-height:38vh}
 small.note{color:#666}
-pre.sample{white-space:pre-wrap;background:#fff;border:1px dashed #ddd;border-radius:8px;padding:8px}
 </style>
 </head>
 <body>
@@ -26,63 +25,46 @@ pre.sample{white-space:pre-wrap;background:#fff;border:1px dashed #ddd;border-ra
   </div>
   <textarea id="src" placeholder="1行目=タイトル、2行目=固定キー（[A-Za-z0-9_-]）&#10;◆ main&#10;# 導入 @タグA&#10;本文…"></textarea>
   <textarea id="dst" class="out" placeholder="ここに完成HTMLが出力されます"></textarea>
-  <details>
-    <summary>入力仕様のチートシート</summary>
-    <pre class="sample">『TRPGシナリオ（仮）』
-TRPG-scenario_01
-◆ info
-# このシナリオについて @概要 情報
-テキスト テキスト ◆ other は本文扱い
-◆ main
-# 導入 @導入
-導入本文 #導入##場面###小項 みたいなジャンプを適所で
-## 場面 @シーン 調査
-駅前での聞き込み。◆info#このシナリオについて にも飛べる
-### 古書店の店主 @NPC
-口数は少ないが鋭い。
-◆ etc
-# 付録 @付録
-…</pre>
-  </details>
 </div>
 
 <script>
 (()=>{"use strict";
-/* ====== DOM ====== */
 const $=s=>document.querySelector(s);
 const src=$("#src"), dst=$("#dst"), btnC=$("#btnConvert"), btnD=$("#btnDownload"), status=$("#status");
 
-/* ====== Utils ====== */
 const VALID_KEY=/^[A-Za-z0-9_-]+$/;
-// 末尾の句読点等はジャンプ名から除外
-const trimPunct = (s)=>s.replace(/[。、．，,.、。…!！?？）\)\]】」』>]+$/u,"");
-// djb2（安定ハッシュ）
-function hashOf(s){ let h=5381; for(const ch of s){ h=((h<<5)+h)+ch.codePointAt(0); h|=0; } return (h>>>0).toString(36); }
-function uniqueId(base,taken){ let id=base, n=2; while(taken.has(id)) id=base+"-"+(n++); taken.add(id); return id; }
+// 文末句読点のみ除去（括弧は残す）
+const trimPunct=(s)=>s.replace(/[。、．，,、。…!！?？]+$/u,"");
 
-function makeEl(name, attrs={}, children=[]){
-  const el=document.createElement(name);
-  for(const [k,v] of Object.entries(attrs||{})){
-    if(k==="text"){ el.textContent=v; }
-    else if(k==="dataset"){ for(const [dk,dv] of Object.entries(v)) el.dataset[dk]=dv; }
-    else if(k==="className"){ el.className=v; }
-    else{ el.setAttribute(k,v); }
-  }
-  for(const ch of children) el.appendChild(ch);
-  return el;
+// 見出し照合用の正規化
+function normKey(s){
+  if(!s) return "";
+  let out=s.normalize("NFKC");
+  // 不可視類
+  out=out.replace(/[\u200B-\u200D\uFEFF\u180E\u00AD\u2060\uFE00-\uFE0F]/g,"");
+  // 空白ゆらぎ
+  out=out.replace(/\u3000/g," ").replace(/\s+/g," ").trim();
+  // よくある記号ゆらぎ
+  out=out.replace(/[\u2010-\u2015\u2212\u30FC\uFF0D]/g,"-"); // 長音/ハイフン
+  out=out.replace(/[\uFF1A\u2236]/g,":");                  // コロン
+  out=out.replace(/[\u00B7\u2219\u2027]/g,"・");            // 中黒
+  out=out.replace(/[\u201C\u201F]/g,"“").replace(/[\u201D]/g,"”");
+  return out;
 }
+// 安定ID
+function hashOf(s){let h=5381;for(const ch of s){h=((h<<5)+h)+ch.codePointAt(0);h|=0;}return(h>>>0).toString(36);}
+function uniqueId(base,taken){let id=base,n=2;while(taken.has(id))id=base+"-"+(n++);taken.add(id);return id;}
+// 安全ノード
+function makeEl(name,attrs={},children=[]){const el=document.createElement(name);for(const[k,v]of Object.entries(attrs||{})){if(k==="text"){el.textContent=v;}else if(k==="dataset"){for(const[dk,dv]of Object.entries(v))el.dataset[dk]=dv;}else if(k==="className"){el.className=v;}else{el.setAttribute(k,v);}}for(const ch of children)el.appendChild(ch);return el;}
 
-/* ====== Inline formatting (no innerHTML) ======
-  **bold** / *italic* / __underline__ / ~~strike~~
-*/
+// インライン装飾（text→nodes）
 function formatInline(text){
-  const root=document.createDocumentFragment();
-  let i=0;
+  const root=document.createDocumentFragment();let i=0;
   const pats=[
-    {re:/\*\*([^*]+)\*\*/y,  wrap:(t)=>["strong",t]},
-    {re:/\*([^*]+)\*/y,      wrap:(t)=>["em",t]},
-    {re:/__([^_]+)__/y,      wrap:(t)=>["u",t]},
-    {re:/~~([^~]+)~~/y,      wrap:(t)=>["s",t]},
+    {re:/\*\*([^*]+)\*\*/y,wrap:(t)=>["strong",t]},
+    {re:/\*([^*]+)\*/y,wrap:(t)=>["em",t]},
+    {re:/__([^_]+)__/y,wrap:(t)=>["u",t]},
+    {re:/~~([^~]+)~~/y,wrap:(t)=>["s",t]},
   ];
   while(i<text.length){
     let hit=false;
@@ -91,10 +73,8 @@ function formatInline(text){
       const m=p.re.exec(text);
       if(m){
         if(m.index>i) root.appendChild(document.createTextNode(text.slice(i,m.index)));
-        const [tag,content]=p.wrap(m[1]);
-        const el=document.createElement(tag);
-        el.appendChild(document.createTextNode(content));
-        root.appendChild(el);
+        const[tag,content]=p.wrap(m[1]); const el=document.createElement(tag);
+        el.appendChild(document.createTextNode(content)); root.appendChild(el);
         i=p.re.lastIndex; hit=true; break;
       }
     }
@@ -103,233 +83,221 @@ function formatInline(text){
   return root;
 }
 
-/* ====== Parse plaintext ====== */
+// 入力パース
 function parseInput(raw){
   const lines=raw.replace(/\r\n?/g,"\n").split("\n");
   if(lines.length<2) throw new Error("先頭2行（タイトル/固定キー）が不足しています。");
-  const title=lines[0].trim();
-  const key=lines[1].trim();
+  const title=lines[0].trim(); const key=lines[1].trim();
   if(!title) throw new Error("タイトルが空です。");
-  if(!VALID_KEY.test(key)) throw new Error("固定キーが不正です。使用可能文字は [A-Za-z0-9_-] のみ。");
+  if(!VALID_KEY.test(key)) throw new Error("固定キーが不正です。");
 
-  const pages={info:[], main:[], etc:[]};
-  const headsTree={info:[], main:[], etc:[]};      // 階層ツリー
-  const stacks={info:[], main:[], etc:[]};         // 経路構築用スタック
-  const taken={info:new Set(), main:new Set(), etc:new Set()}; // ID重複回避
-  let cur="main"; // デフォルトは main
+  const pages={info:[],main:[],etc:[]};
+  const headsTree={info:[],main:[],etc:[]};
+  const stacks={info:[],main:[],etc:[]};
+  const taken={info:new Set(),main:new Set(),etc:new Set()};
+  let cur="main";
 
-  // code block state
-  let inCode=false, codeFence=null, codeLang="", codeBuf=[];
-
-  const body=lines.slice(2);
-  for(let i=0;i<body.length;i++){
-    let line=body[i];
-
-    // ページ指示
+  let inCode=false, fence=null, codeBuf=[];
+  for(const lineRaw of lines.slice(2)){
+    const line=lineRaw;
+    // ◆ページ
     const mPage=line.match(/^◆\s*([^\s]+)\s*$/);
     if(!inCode && mPage){
       const name=mPage[1];
-      if(name==="info"||name==="main"||name==="etc"){ cur=name; continue; }
-      // 無効な◆は本文扱いに落とす（下へ）
+      if(name==="info"||name==="main"||name==="etc"){cur=name; continue;}
     }
-
-    // コードフェンス
-    const mFence = line.match(/^(```|''')\s*([A-Za-z0-9#+.-_]*)\s*$/);
-    if(mFence && !inCode){
-      inCode=true; codeFence=mFence[1]; codeLang=mFence[2]||""; codeBuf=[];
-      continue;
-    }else if(mFence && inCode && mFence[1]===codeFence){
+    // ```/'''
+    const mFence=line.match(/^(```|''')\s*([A-Za-z0-9#+.-_]*)\s*$/);
+    if(mFence && !inCode){ inCode=true; fence=mFence[1]; codeBuf=[]; continue; }
+    if(mFence && inCode && mFence[1]===fence){
       inCode=false;
       const pre=makeEl("pre",{className:"code"},[
         makeEl("button",{className:"copy",text:"copy"}),
         makeEl("code",{},[document.createTextNode(codeBuf.join("\n"))])
       ]);
-      pages[cur].push({type:"node", node:pre});
+      pages[cur].push({type:"node",node:pre});
       continue;
-    }else if(inCode){
-      codeBuf.push(line); continue;
     }
+    if(inCode){ codeBuf.push(line); continue; }
 
-    // 見出し（# + スペース必須）
+    // 見出し（# + 半角スペース必須）
     const mH=line.match(/^(#{1,3})\s+(.+?)\s*$/);
     if(mH){
-      const level=mH[1].length;
-      let raw=mH[2];
-
-      // タグ抽出（@メモは禁止）
-      const tagMatches=[...raw.matchAll(/\s@([^\s@]+)/g)].map(x=>x[1]);
-      raw = raw.replace(/\s@([^\s@]+)/g,"").trim();
+      const level=mH[1].length; let raw=mH[2];
       const tags=[];
-      for(const t of tagMatches){
-        if(t==="メモ") throw new Error("@メモ は使用禁止です（変換器が自動付与）。");
-        tags.push(t);
-      }
-
-      // 親経路（テキスト）→ パス → 安定ID
+      raw=raw.replace(/\s@([^\s@]+)/g,(m,t)=>{ if(t==="メモ") throw new Error("@メモは禁止"); tags.push(t); return ""; }).trim();
       while(stacks[cur].length && stacks[cur].at(-1).lvl>=level) stacks[cur].pop();
       const parents=stacks[cur].map(n=>n.text);
-      const path=[...parents, raw].join(">"); // 例: 大>中>小
-      const base="h-"+hashOf(path);
-      const id=uniqueId(base, taken[cur]);
-
-      // ツリー更新
-      const node={lvl:level, text:raw, id, children:[]};
-      if(stacks[cur].length) stacks[cur].at(-1).children.push(node);
-      else headsTree[cur].push(node);
+      const path=[...parents,raw].join(">");
+      const id=uniqueId("h-"+hashOf(path), taken[cur]);
+      const node={lvl:level,text:raw,id,children:[]};
+      if(stacks[cur].length) stacks[cur].at(-1).children.push(node); else headsTree[cur].push(node);
       stacks[cur].push(node);
-
-      // ページノード
-      pages[cur].push({type:"h", level, text:raw, id, tags});
+      pages[cur].push({type:"h",level,text:raw,id,tags});
       continue;
     }
 
     // 段落
-    pages[cur].push({type:"p", text:line});
+    pages[cur].push({type:"p",text:line});
   }
 
-  // 経路辞書（同名キーは先勝ち）
-  const dict={info:new Map(), main:new Map(), etc:new Map()};
+  // 経路辞書（raw & 正規化）
+  const dict={info:new Map(),main:new Map(),etc:new Map()};
   for(const pg of ["info","main","etc"]){
     (function walk(nodes, trail=[]){
       for(const n of nodes){
-        const key1=n.text; const key2=[...trail, n.text].join(">");
-        if(!dict[pg].has(key1)) dict[pg].set(key1, n.id);
-        dict[pg].set(key2, n.id);
-        if(n.children?.length) walk(n.children, [...trail, n.text]);
+        const raw1=n.text;
+        const raw2=[...trail,n.text].join(">");
+        const k1=normKey(raw1), k2=normKey(raw2);
+        if(!dict[pg].has(raw1)) dict[pg].set(raw1, n.id);
+        if(!dict[pg].has(k1))   dict[pg].set(k1,   n.id);
+        dict[pg].set(raw2, n.id);
+        dict[pg].set(k2,   n.id);
+        if(n.children?.length) walk(n.children,[...trail,n.text]);
       }
-    })(headsTree[pg], []);
+    })(headsTree[pg],[]);
   }
-
   return {title,key,pages,dict,headsTree};
 }
 
-/* ====== Build DOM for template ====== */
+// HTML構築
 async function buildHTML(parsed){
-  const tplText = await fetch("template.html").then(r=>{
-    if(!r.ok) throw new Error("template.html が読み込めませんでした。");
-    return r.text();
-  });
+  const tpl=await fetch("template.html").then(r=>{if(!r.ok) throw new Error("template.html を読み込めません"); return r.text();});
+  const doc=new DOMParser().parseFromString(tpl,"text/html");
+  doc.title=parsed.title;
+  const mk=doc.querySelector('meta[name="trpg-key"]'); if(mk) mk.setAttribute("content", parsed.key);
+  const ht=doc.querySelector("header .title"); if(ht) ht.textContent=parsed.title;
 
-  // template を DOM 化
-  const doc = new DOMParser().parseFromString(tplText,"text/html");
-
-  // タイトル・キーの反映
-  doc.title = parsed.title;
-  const metaKey = doc.querySelector('meta[name="trpg-key"]');
-  if(metaKey) metaKey.setAttribute("content", parsed.key);
-  const headerTitle = doc.querySelector("header .title");
-  if(headerTitle) headerTitle.textContent = parsed.title;
-
-  // ページへ流し込み
-  function mountPage(pageName, items){
-    const sec = doc.querySelector(`section.page[data-page="${pageName}"]`);
-    if(!sec) return;
+  function mountPage(name,items){
+    const sec=doc.querySelector(`section.page[data-page="${name}"]`); if(!sec) return;
     while(sec.firstChild) sec.removeChild(sec.firstChild);
-
-    for(const item of items){
-      if(item.type==="h"){
-        const tagName = item.level===1? "h1" : item.level===2? "h2" : "h3";
-        const h = doc.createElement(tagName);
-        h.dataset.id=item.id;
-        if(item.tags?.length) h.dataset.tags=item.tags.join(" ");
-        h.appendChild(document.createTextNode(item.text));
+    for(const it of items){
+      if(it.type==="h"){
+        const tag=it.level===1?"h1":it.level===2?"h2":"h3";
+        const h=doc.createElement(tag);
+        h.dataset.id=it.id; if(it.tags?.length) h.dataset.tags=it.tags.join(" ");
+        h.appendChild(document.createTextNode(it.text));
         sec.appendChild(h);
-      }else if(item.type==="p"){
-        const p=doc.createElement("p");
-        p.appendChild(formatInline(item.text));
-        sec.appendChild(p);
-      }else if(item.type==="node"){
-        sec.appendChild(item.node.cloneNode(true));
+      }else if(it.type==="p"){
+        const p=doc.createElement("p"); p.appendChild(formatInline(it.text)); sec.appendChild(p);
+      }else if(it.type==="node"){
+        sec.appendChild(it.node.cloneNode(true));
       }
     }
   }
+  mountPage("info",parsed.pages.info);
+  mountPage("main",parsed.pages.main);
+  mountPage("etc", parsed.pages.etc);
 
-  mountPage("info", parsed.pages.info);
-  mountPage("main", parsed.pages.main);
-  mountPage("etc",  parsed.pages.etc);
-
-  /* ===== ハッシュジャンプを本文中のテキストノードから生成 =====
-     - ◆info#大##中###小 → <a href="#info:<id>">
-     - #大##中###小 → <a href="#<id>">
-     - 見出し行は対象外（段落のみ）
-     - 前後が空白/行頭/行末のときだけ有効
-  */
+  // ハッシュジャンプ（空白＆日本語句読点で終端判定／ラベル内空白OK）
   function wireJumps(){
-    // ページごとの辞書
     const dict=parsed.dict;
-
-    // 段落・リスト・表・blockquote 等のテキストノードを対象にする
-    const walker = doc.createTreeWalker(doc.body, NodeFilter.SHOW_TEXT, {
+    const END_BOUND=/[\s、。．，,）\)\]】」』＞>」』】〉》]+|$/u; // 空白 or 主要句読点・閉じカッコ類 or 行末
+    const walker=doc.createTreeWalker(doc.body,NodeFilter.SHOW_TEXT,{
       acceptNode(n){
         if(!n.nodeValue || !n.nodeValue.trim()) return NodeFilter.FILTER_REJECT;
-        const p=n.parentElement;
-        if(!p) return NodeFilter.FILTER_REJECT;
-        // 見出しやコードの中は対象外
+        const p=n.parentElement; if(!p) return NodeFilter.FILTER_REJECT;
         if(p.closest("h1,h2,h3,pre,code,.code")) return NodeFilter.FILTER_REJECT;
         return NodeFilter.FILTER_ACCEPT;
       }
     });
 
-    const replaceList=[];
     while(walker.nextNode()){
       const node=walker.currentNode;
       const txt=node.nodeValue;
-      // ◆page#大##中###小 / #大##中###小
-      const re=/(\s|^)(?:◆(info|main|etc))?#([^\s#]+)(?:##([^\s#]+))?(?:###([^\s#]+))?(\s|$)/g;
+      // （空白|行頭）◆page? #...（空白/句読点/閉じカッコ/行末）
+      const RE=/(\s|^)(?:◆(info|main|etc))?\s*(#)(?=[^\s])?/gu;
       let m, last=0, parts=[], touched=false;
 
-      while((m=re.exec(txt))){
-        // 左右は空白or行頭/行末のみ有効
-        const left = m[1], page = m[2]||null, a=m[3], b=m[4], c=m[5], right=m[6];
-        const labels=[a,b,c].filter(Boolean).map(trimPunct);
-        const key=labels.join(">");
-        const poolPage = page || findPageOfNode(node);
-        const id = (page? dict[page].get(key) || dict[page].get(labels.at(-1))
-                         : dict[poolPage].get(key) || dict[poolPage].get(labels.at(-1))) || null;
+      while((m=RE.exec(txt))){
+        const left=m[1], page=m[2]||null;
+        let start=RE.lastIndex; // '#' の直後
+        if(txt[start-1] !== "#") continue; // 念のため
 
-        // 置換フラグメント作成
+        // チャンク終端を探す（次の END_BOUND まで）
+        END_BOUND.lastIndex=start;
+        const endMatch=END_BOUND.exec(txt);
+        const end = endMatch ? endMatch.index : txt.length;
+        const chunk = txt.slice(start-1, end); // 先頭の '#' を含む
+
+        const labelsRaw=parseChain(chunk);
+        if(!labelsRaw){ continue; }
+
+        // 照合キー
+        const labelsNor=labelsRaw.map(normKey);
+        const queryRaw=labelsRaw.map(trimPunct).join(">");
+        const queryNor=labelsNor.map(trimPunct).join(">");
+        const pool=page||findPageOfNode(node);
+        const d = page ? dict[page] : dict[pool];
+        let id = d.get(queryRaw) || d.get(trimPunct(labelsRaw.at(-1))) ||
+                 d.get(queryNor) || d.get(trimPunct(labelsNor.at(-1))) || null;
+
         touched=true;
         parts.push(document.createTextNode(txt.slice(last, m.index + left.length)));
         if(id){
           const aEl=doc.createElement("a");
           aEl.setAttribute("href", page? ("#"+page+":"+id) : ("#"+id));
-          // テンプレ側でリンク名は自動補完されるので中身は空でOK
+          // 見えるテキストも即時に入れておく（テンプレ側の補完がなくてもOK）
+          aEl.textContent=labelsRaw.join(" / ");
           parts.push(aEl);
         }else{
-          // 見つからなければ原文維持
-          parts.push(document.createTextNode(txt.slice(m.index+left.length, re.lastIndex-right.length)));
+          parts.push(document.createTextNode(chunk)); // 解決不可は原文維持
         }
-        last=re.lastIndex - right.length;
+        last=end;
+        RE.lastIndex=end; // スキャン位置を進める
       }
+
       if(touched){
         parts.push(document.createTextNode(txt.slice(last)));
-        const frag=doc.createDocumentFragment(); parts.forEach(p=>frag.appendChild(p));
+        const frag=document.createDocumentFragment(); parts.forEach(p=>frag.appendChild(p));
         node.parentNode.replaceChild(frag,node);
       }
     }
 
     function findPageOfNode(n){
       const sec=n.parentElement?.closest("section.page");
-      return sec?.dataset.page || "main";
+      return sec?.dataset.page||"main";
+    }
+
+    // '#大##中###小' を段階分割（内部の空白は許容）
+    function parseChain(chunk){
+      if(!chunk || chunk[0]!=="#") return null;
+      let i=1; const labels=[];
+      for(let k=0;k<3;k++){
+        const next=findNextDelim(chunk,i);
+        if(next===-1){
+          const raw=chunk.slice(i).trim(); if(!raw) break;
+          labels.push(raw); break;
+        }else{
+          const raw=chunk.slice(i,next).trim(); if(!raw) return null;
+          labels.push(raw);
+          const isTriple = chunk.startsWith("###",next);
+          i=next+(isTriple?3:2);
+        }
+      }
+      return labels.length?labels:null;
+    }
+    function findNextDelim(s,from){
+      // 次の '##' を見つける（'###' もここで拾える）
+      let i=s.indexOf("##",from);
+      return i===-1? -1 : i;
     }
   }
   wireJumps();
 
-  // serialize
-  const out = "<!doctype html>\n"+doc.documentElement.outerHTML;
-  return out;
+  return "<!doctype html>\n"+doc.documentElement.outerHTML;
 }
 
-/* ====== Actions ====== */
-btnC.onclick=async ()=>{
+// 実行
+btnC.onclick=async()=>{
   try{
     status.textContent="変換中…";
-    const parsed = parseInput(src.value||"");
-    const html = await buildHTML(parsed);
-    dst.value = html;
+    const parsed=parseInput(src.value||"");
+    const html=await buildHTML(parsed);
+    dst.value=html;
     status.textContent="完了 ✔️";
   }catch(err){
-    status.textContent="エラー ❗ " + (err?.message||err);
+    status.textContent="エラー ❗ "+(err?.message||err);
   }
 };
 btnD.onclick=()=>{
@@ -340,7 +308,6 @@ btnD.onclick=()=>{
   a.click();
   setTimeout(()=>URL.revokeObjectURL(a.href),1000);
 };
-
 })();
 </script>
 </body>
