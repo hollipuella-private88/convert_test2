@@ -332,6 +332,7 @@ function renderVirtual(list,ws,preserve){
   const arr = preserve ? list : list.slice().sort(cmpDocOrder);
   if(arr.length===0){ cont.textContent="該当なし"; return; }
 
+  const frag=document.createDocumentFragment();
   const sentinel=document.createElement("div"); // 末尾監視用
   sentinel.style.height="1px";
   cont.appendChild(sentinel);
@@ -393,7 +394,7 @@ function highlight(el,ws){
     const p=n.parentElement; if(p&&(p.closest("pre,code,.code")||p.classList.contains("note"))) return NodeFilter.FILTER_REJECT;
     return NodeFilter.FILTER_ACCEPT;
   }});
-  const re=new RegExp("("+ws.map(w=>w.replace(/[.*+?^${}()|[\]\\]/g,"\\$&")).join("|")+")","ig");
+  const re=new RegExp("("+ws.map(w=>w.replace(/[.*+?^${}()|[\\]\\\\]/g,"\\$&")).join("|")+")","ig");
   const targets=[]; while(tw.nextNode()){const n=tw.currentNode; if(re.test(n.nodeValue)) targets.push(n);}
   targets.forEach(n=>{
     const parts=n.nodeValue.split(re), f=document.createDocumentFragment();
@@ -427,23 +428,19 @@ document.addEventListener("click",async e=>{
   try{ await navigator.clipboard.writeText(code); b.classList.add("done"); b.textContent="copied ✓"; setTimeout(()=>{b.classList.remove("done"); b.textContent="copy";},900);}catch{ alert("copy failed"); }
 });
 
-/* ========= ハッシュリンク名補完（修正あり） ========= */
-// 元実装は ent.page+":"+id をまるごと encode していた → ページ名の ":" まで %3A 化される不具合。 [oai_citation:2‡09080857template2.html](file-service://file-NqifNUarcqHM2ZvzTP5SCw)
+/* ========= ハッシュリンク名補完 ========= */
 function parseHash(h){ const raw=decodeURIComponent(h.replace(/^#/,"")); if(!raw) return {id:"",page:null}; const m=raw.match(/^([a-zA-Z0-9_-]+):(.*)$/); return m?{page:m[1],id:m[2]}:{page:null,id:raw}; }
 function linkNames(){
-  $$('a[href^="#"]',sc).forEach(a=>{
-    const {id}=parseHash(a.getAttribute("href")); const ent=ID.get(id);
+  $$('a[href^="#"]', sc).forEach(a=>{
+    const {id,page} = parseHash(a.getAttribute("href"));
+    const ent = ID.get(id);
     if(ent){
-      a.textContent=ent.text; a.title=ent.text;
-      a.addEventListener("click",(ev)=>{
-        ev.preventDefault();
-        // ★ 修正：ページは素のまま、IDのみ encode
-        location.hash = "#"+ ent.page + ":" + encodeURIComponent(id);
-      },{once:true});
+      if(!a.textContent.trim()){ a.textContent = ent.text; a.title = ent.text; }
+      // a.onclick ハンドラは不要。ハッシュはそのまま使う：
+      // location.hash = a.getAttribute("href");  ← カスタムするならこれ（encode不要）
     }
   });
 }
-// ハッシュ変更時のスクロール処理は既存どおり。 [oai_citation:3‡09080857template2.html](file-service://file-NqifNUarcqHM2ZvzTP5SCw)
 addEventListener("hashchange",()=>{
   const {id,page}=parseHash(location.hash);
   if(!id) return;
@@ -607,11 +604,6 @@ hookNotes();
 buildIndex(); buildChips();
 buildTOC(); search();
 linkNames(); updIcon();
-
-/* ★ 追加：URLにハッシュがある場合は即ジャンプ（初回ロード直後） */
-if (location.hash) {
-  dispatchEvent(new HashChangeEvent("hashchange")); // 既存のhashchangeリスナーで処理
-}
 
 })();
 </script>
