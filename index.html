@@ -1,362 +1,305 @@
-<!DOCTYPE html>
-<html lang="ja">
-<head>
-<meta charset="utf-8">
-<title>TRPGシナリオHTML変換器（エラー表示つき）</title>
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<style>
-  :root{
-    --bg:#f9fafb; --fg:#111; --muted:#6b7280; --ok:#065f46; --okbg:#ecfdf5; --okbd:#a7f3d0;
-    --ng:#7f1d1d; --ngbg:#fef2f2; --ngbd:#fecaca; --line:#e5e7eb;
-  }
-  html,body{height:100%}
-  body{margin:0;padding:16px;background:var(--bg);color:var(--fg);font:16px/1.7 system-ui,-apple-system,"Segoe UI",Roboto,"Noto Sans JP","Yu Gothic UI","Meiryo",sans-serif}
-  h1{margin:0 0 .5rem 0;font-size:1.2rem}
-  .row{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:8px}
-  textarea{width:100%;height:52vh;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;resize:vertical;border:1px solid var(--line);border-radius:8px;padding:10px;background:#fff}
-  button{appearance:none;border:1px solid var(--line);background:#fff;border-radius:8px;padding:.5rem .85rem;cursor:pointer}
-  button[disabled]{opacity:.5;cursor:not-allowed}
-  .alert{border:1px solid; border-radius:10px; padding:.6rem .8rem; margin:.6rem 0; display:none}
-  .alert.show{display:block}
-  .alert.ok{color:var(--ok); background:var(--okbg); border-color:var(--okbd)}
-  .alert.err{color:var(--ng); background:var(--ngbg); border-color:var(--ngbd)}
-  details{margin-top:.6rem}
-  summary{cursor:pointer; user-select:none}
-  pre#out{white-space:pre-wrap;background:#fff;border:1px solid var(--line);padding:1rem;margin-top:.5rem;max-height:40vh;overflow:auto;border-radius:10px}
-  .hint{color:var(--muted);font-size:.9rem}
-</style>
-</head>
-<body>
-  <h1>TRPGシナリオHTML変換器</h1>
-  <p class="hint">先頭2行：1)タイトル 2)固定キー（半角 <code>[A-Za-z0-9_-]</code>）。<br>ページ区切り：<code>◆ info</code> / <code>◆ main</code> / <code>◆ etc</code></p>
-
-  <div class="row">
-    <button id="run">変換</button>
-    <button id="copy" disabled>出力をコピー</button>
-    <button id="save" disabled>ダウンロード</button>
-    <span id="spin" class="hint" style="display:none">処理中…</span>
-  </div>
-
-  <!-- ユーザー入力 -->
-  <textarea id="src" placeholder="ここにテキストを貼り付け"></textarea>
-
-  <!-- メッセージ領域（見えるエラー/成功） -->
-  <div id="msg" class="alert" role="alert" aria-live="assertive"></div>
-
-  <!-- 出力プレビュー（安全なテキスト表示） -->
-  <details id="outWrap">
-    <summary>出力HTML（テキスト）</summary>
-    <pre id="out"></pre>
-  </details>
-
-  <!-- その場プレビュー（iframe） -->
-  <details id="pvWrap">
-    <summary>プレビュー（iframe）</summary>
-    <iframe id="pv" title="プレビュー" style="width:100%;height:60vh;border:1px solid #e5e7eb;border-radius:10px;background:#fff"></iframe>
-  </details>
-
-<script>
-(() => {
-  "use strict";
-
-  const $ = (s, r = document) => r.querySelector(s);
-
-  // ================= エラー/通知ユーティリティ =================
-  const msgBox = $("#msg");
-  function showError(err){
-    const text = (err && err.message) ? err.message : (typeof err === "string" ? err : "不明なエラーが発生しました");
-    msgBox.className = "alert err show";
-    msgBox.textContent = "エラー: " + text;
-  }
-  function showOk(text){
-    msgBox.className = "alert ok show";
-    msgBox.textContent = text;
-  }
-  function clearMsg(){ msgBox.className = "alert"; msgBox.textContent = ""; }
-
-  // 予期せぬエラーも見える化
-  window.addEventListener("error", (e) => showError(e.error || e.message || "スクリプトエラー"));
-  window.addEventListener("unhandledrejection", (e) => showError(e.reason || "Promiseで未処理の例外"));
-
-  // ================== UI 部品 ==================
-  const btnRun = $("#run");
-  const btnCopy = $("#copy");
-  const btnSave = $("#save");
-  const spin = $("#spin");
-  const out = $("#out");
-  const outWrap = $("#outWrap");
-  const pv = $("#pv");
-  const pvWrap = $("#pvWrap");
-  const src = $("#src");
-
-  // ================ 変換エントリポイント =================
-  btnRun.addEventListener("click", () => {
-    clearMsg();
-    btnRun.disabled = true; btnCopy.disabled = true; btnSave.disabled = true;
-    spin.style.display = "inline";
-
-    try {
-      const html = convert(src.value);
-      out.textContent = html;
-      outWrap.open = false; // 折りたたんでおく
-      btnCopy.disabled = btnSave.disabled = false;
-
-      // iframe プレビュー
-      pv.srcdoc = html;
-      pvWrap.open = true;
-
-      showOk("変換が完了しました。");
-    } catch (e) {
-      showError(e);
-    } finally {
-      spin.style.display = "none";
-      btnRun.disabled = false;
-    }
-  });
-
-  btnCopy.addEventListener("click", async () => {
-    try{
-      await navigator.clipboard.writeText(out.textContent);
-      showOk("出力をクリップボードにコピーしました。");
-    }catch(e){
-      showError("クリップボードにコピーできませんでした。");
-    }
-  });
-
-  btnSave.addEventListener("click", () => {
-    try{
-      const blob = new Blob([out.textContent], {type:"text/html;charset=utf-8"});
-      const a = document.createElement("a");
-      a.href = URL.createObjectURL(blob);
-      a.download = "scenario.html";
-      a.click();
-      URL.revokeObjectURL(a.href);
-      showOk("scenario.html をダウンロードしました。");
-    }catch(e){
-      showError(e);
-    }
-  });
-
-  // ================ ここから変換ロジック ================
-  // 日本語対応 slugify（テンプレ側と整合）
-  const slugify = (s) => {
-    return String(s||"")
-      .normalize("NFKC")
-      .replace(/[^\p{L}\p{N}\-\_\s]/gu, "")
-      .trim()
-      .replace(/\s+/g, "-")
-      .replace(/-+/g, "-")
-      .toLowerCase()
-      .replace(/^-|-$|^$/g, (m) => (m ? "" : "sec"));
-  };
-
-  function convert(input){
-    const text = String(input||"").trim();
-    if(!text) throw new Error("入力が空です。");
-
-    const lines = text.split(/\r?\n/);
-
-    // 1) 先頭2行チェック
-    const title = (lines[0]||"").trim();
-    if(!title) throw new Error("1行目：タイトルが未入力です。");
-
-    const key = (lines[1]||"").trim();
-    if(!/^[A-Za-z0-9_-]+$/.test(key)) throw new Error("2行目：固定キーが不正です（使用可能: A-Z a-z 0-9 _ -）。");
-
-    // 2) ページ分割
-    const pages = {info:[], main:[], etc:[]};
-    let current = "main";  // デフォルトは main
-    let buf = [];
-
-    const flush = () => {
-      if(buf.length){ pages[current].push(buf.join("\n")); buf.length=0; }
-    };
-
-    for(let i=2;i<lines.length;i++){
-      const line = lines[i];
-      const m = /^◆\s*([A-Za-z0-9_-]+)/.exec(line);
-      if(m){
-        const tag = m[1];
-        if(tag in pages){ flush(); current = tag; }
-        else buf.push(line); // 無効は本文扱いとして残す
-      }else{
-        buf.push(line);
-      }
-    }
-    flush();
-
-    // 3) 本文→HTMLノード（安全：textContentのみ）
-    const doc = new Document();
-    const wrapper = doc.createElement("div");
-
-    function parseToSection(name, chunks){
-      const sec = doc.createElement("section");
-      sec.className = "page";
-      sec.dataset.page = name;
-      sec.setAttribute("aria-hidden", name==="info" ? "false" : "true");
-      (chunks||[]).forEach(chunk=>{
-        const nodes = parseChunk(chunk, doc);
-        nodes.forEach(n=>sec.appendChild(n));
-      });
-      return sec;
-    }
-
-    wrapper.appendChild(parseToSection("info", pages.info));
-    wrapper.appendChild(parseToSection("main", pages.main));
-    wrapper.appendChild(parseToSection("etc", pages.etc));
-
-    // 4) 出力HTML（テンプレへ差し込み）
-    const html = String(rawTemplate())
-      .replaceAll("{{TITLE}}", escapeHTML(title))
-      .replaceAll("{{KEY}}", escapeHTML(key))
-      .replace("<!-- CONTENT:info -->", (wrapper.querySelector('section[data-page="info"]')||{}).innerHTML || "")
-      .replace("<!-- CONTENT:main -->", (wrapper.querySelector('section[data-page="main"]')||{}).innerHTML || "")
-      .replace("<!-- CONTENT:etc -->", (wrapper.querySelector('section[data-page="etc"]')||{}).innerHTML || "");
-
-    return html;
-  }
-
-  function parseChunk(src, doc){
-    const out = [];
-    const lines = String(src||"").split(/\r?\n/);
-    let inCode = false, fence = "", codeBuf = [], codeLang = "";
-
-    const flushCode = () => {
-      if(!inCode) return;
-      const pre = doc.createElement("pre"); pre.className = "code";
-      const btn = doc.createElement("button"); btn.className="copy"; btn.type="button"; btn.textContent="copy";
-      const code = doc.createElement("code");
-      code.textContent = codeBuf.join("\n");
-      pre.append(btn, code);
-      out.push(pre);
-      inCode = false; fence = ""; codeBuf.length=0; codeLang = "";
-    };
-
-    for(let raw of lines){
-      const line = raw ?? "";
-
-      // コードブロック（``` or '''）
-      if(/^(```|''')/.test(line)){
-        if(!inCode){
-          inCode = true;
-          fence = RegExp.$1;
-          codeLang = line.replace(/^(```|''')\s*/,"").trim(); // 先頭の言語名（現状は表示用途なし）
-        }else{
-          flushCode();
-        }
-        continue;
-      }
-      if(inCode){ codeBuf.push(line); continue; }
-
-      // 見出し（# / ## / ###） ※直後スペース必須（仕様）
-      const mh = /^(#{1,3})\s+(.*)$/.exec(line);
-      if(mh){
-        const level = mh[1].length;
-        const text  = mh[2].trim();
-        if(/(?:^|\s)@メモ(?:\s|$)/.test(text)) throw new Error("見出し末尾に @メモ は使えません（変換器が自動付与します）。");
-        const tags = (text.match(/(?:^|\s)@([^\s@]+)/g)||[]).map(s=>s.trim().slice(1));
-        const plain = text.replace(/(?:^|\s)@([^\s@]+)/g,"").trim();
-        const id = slugify(plain);
-        const h = doc.createElement("h"+level);
-        h.textContent = plain;
-        h.dataset.id = id;
-        h.id = id; // テンプレ依存を減らす
-        if(tags.length) h.dataset.tags = tags.join(" ");
-        out.push(h);
-        continue;
-      }
-
-      // ジャンプ記法 -> ハイパーリンク化
-      // 例）#大##中###小  /  ◆info#大##中
-      if(line.trim()){
-        const p = doc.createElement("p");
-
-        // 同ページ or 跨ぎ：正規表現で拾って安全に <a> に置換（テキストノード分割）
-        const parts = splitJumpSyntax(line);
-        parts.forEach(seg=>{
-          if(typeof seg === "string"){
-            p.appendChild(doc.createTextNode(seg));
-          }else{
-            // seg = {page|null, trail:["大","中","小"], raw:"..."}
-            const last = seg.trail.at(-1) || "";
-            const id   = slugify(last);
-            const page = seg.page; // null ならテンプレ側で現在ページ推定
-            const a = doc.createElement("a");
-            a.setAttribute("href", "#"+(page? page+":" : "") + encodeURIComponent(id));
-            a.appendChild(doc.createTextNode(seg.raw)); // 表示テキストはそのまま
-            p.appendChild(a);
-          }
-        });
-
-        out.push(p);
-      }
-    }
-    flushCode();
-    return out;
-  }
-
-  // ジャンプ記法の分割（周囲が空白/行頭/行末の条件も満たす）
-  function splitJumpSyntax(line){
-    const res = [];
-    let lastIndex = 0;
-    const re = /(^|\s)(?:◆([A-Za-z0-9_-]+))?(#(?:[^#\s][^#]*?))(?:\s|$)/g; // 粗取り
-    let m;
-    while((m = re.exec(line))){
-      const prefix = m[1] ?? "";
-      const page = m[2] ?? null;
-      const trailText = m[3] ?? "";
-      const trail = trailText.split("#").filter(Boolean).map(s=>s.trim());
-      const start = m.index + prefix.length;
-      const end = re.lastIndex;
-      // 手前のテキストを追加
-      if(start > lastIndex) res.push(line.slice(lastIndex, start));
-      // 有効：#大##中###小 の最小構成は1個
-      if(trail.length >= 1){
-        res.push({page, trail, raw: (page? "◆"+page : "") + trailText});
-      }else{
-        res.push(line.slice(start, end));
-      }
-      lastIndex = end;
-    }
-    if(lastIndex < line.length) res.push(line.slice(lastIndex));
-    return res;
-  }
-
-  // シンプルなテンプレ（あなたの template 修正版に合わせた箇所）
-  function rawTemplate(){/*
 <!doctype html>
 <html lang="ja">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<title>{{TITLE}}</title>
-<meta name="trpg-key" content="{{KEY}}">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>TRPGシナリオHTML変換器</title>
+<style>
+body{font:14px/1.7 system-ui,-apple-system,"Segoe UI",Roboto,"Noto Sans JP","Meiryo",sans-serif;margin:0;padding:16px;background:#fafafa;color:#222}
+h1{font-size:20px;margin:0 0 8px}
+.wrap{display:grid;grid-template-columns:1fr;gap:12px;max-width:1200px;margin:0 auto}
+textarea{width:100%;min-height:38vh;padding:10px;border:1px solid #ddd;border-radius:8px;background:#fff;resize:vertical;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+.controls{display:flex;flex-wrap:wrap;gap:8px}
+button{border:1px solid #ccc;border-radius:8px;background:#fff;padding:.5em .9em;cursor:pointer}
+.out{min-height:38vh}
+small.note{color:#666}
+pre.sample{white-space:pre-wrap;background:#fff;border:1px dashed #ddd;border-radius:8px;padding:8px}
+</style>
 </head>
 <body>
-<header><h1 class="title">{{TITLE}}</h1></header>
-<main id="sc">
-  <section class="page" data-page="info" aria-hidden="false">
-    <!-- CONTENT:info -->
-  </section>
-  <section class="page" data-page="main" aria-hidden="true">
-    <!-- CONTENT:main -->
-  </section>
-  <section class="page" data-page="etc" aria-hidden="true">
-    <!-- CONTENT:etc -->
-  </section>
-</main>
-<script>
-// ここには、あなたの template 修正版のスクリプトが入る想定です。
-// （本コンバータは data-id / id を両方付けるため、そのまま動作します。）
-</script>
-</body>
-</html>
-*/}
+<div class="wrap">
+  <h1>TRPGシナリオHTML変換器</h1>
+  <div class="controls">
+    <button id="btnConvert">変換</button>
+    <button id="btnDownload">ダウンロード</button>
+    <span id="status"><small class="note">同じフォルダの <code>template.html</code> を読み込みます。</small></span>
+  </div>
+  <textarea id="src" placeholder="1行目=タイトル、2行目=固定キー（[A-Za-z0-9_-]）&#10;◆ main&#10;# 導入 @タグA&#10;本文…"></textarea>
+  <textarea id="dst" class="out" placeholder="ここに完成HTMLが出力されます"></textarea>
+  <details>
+    <summary>入力仕様のチートシート</summary>
+    <pre class="sample">『TRPGシナリオ（仮）』
+TRPG-scenario_01
+◆ info
+# このシナリオについて @概要 情報
+テキスト テキスト ◆ other は本文扱い
+◆ main
+# 導入 @導入
+導入本文 #導入##場面###小項 みたいなジャンプを適所で
+## 場面 @シーン 調査
+駅前での聞き込み。◆info#このシナリオについて にも飛べる
+### 古書店の店主 @NPC
+口数は少ないが鋭い。
+◆ etc
+# 付録 @付録
+…</pre>
+  </details>
+</div>
 
-  // 安全な置換用
-  function escapeHTML(s){
-    return String(s).replace(/[&<>"]/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[ch]));
+<script>
+(()=>{"use strict";
+/* ====== DOM ====== */
+const $=s=>document.querySelector(s);
+const src=$("#src"), dst=$("#dst"), btnC=$("#btnConvert"), btnD=$("#btnDownload"), status=$("#status");
+
+/* ====== Utils（日本語対応版） ====== */
+const VALID_KEY=/^[A-Za-z0-9_-]+$/;
+// 末尾の句読点などはジャンプ照合から外す（#導入。→ #導入）
+const trimPunct=(s)=>s.replace(/[。、．，,.、。…!！?？）\)\]】」』>]+$/u,"");
+// 安定ハッシュ（djb2）→ base36（ASCII のみ）で ID 化
+function hashOf(s){ let h=5381; for(const ch of s){ h=((h<<5)+h)+ch.codePointAt(0); h|=0; } return (h>>>0).toString(36); }
+function uniqueId(base,taken){ let id=base, n=2; while(taken.has(id)) id=base+"-"+(n++); taken.add(id); return id; }
+
+function makeEl(name, attrs={}, children=[]){
+  const el=document.createElement(name);
+  for(const [k,v] of Object.entries(attrs||{})){
+    if(k==="text"){ el.textContent=v; }
+    else if(k==="dataset"){ for(const [dk,dv] of Object.entries(v)) el.dataset[dk]=dv; }
+    else if(k==="className"){ el.className=v; }
+    else{ el.setAttribute(k,v); }
   }
+  for(const ch of children) el.appendChild(ch);
+  return el;
+}
+
+/* ====== インライン装飾（textContentベースで安全） ====== */
+function formatInline(text){
+  const root=document.createDocumentFragment();
+  let i=0;
+  const patterns=[
+    {re:/\*\*([^*]+)\*\*/y,  wrap:(t)=>["strong",t]},
+    {re:/\*([^*]+)\*/y,      wrap:(t)=>["em",t]},
+    {re:/__([^_]+)__/y,      wrap:(t)=>["u",t]},
+    {re:/~~([^~]+)~~/y,      wrap:(t)=>["s",t]},
+  ];
+  while(i<text.length){
+    let matched=false;
+    for(const p of patterns){
+      p.re.lastIndex=i;
+      const m=p.re.exec(text);
+      if(m){
+        if(m.index>i) root.appendChild(document.createTextNode(text.slice(i,m.index)));
+        const [tag,content]=p.wrap(m[1]);
+        const el=document.createElement(tag);
+        el.appendChild(document.createTextNode(content));
+        root.appendChild(el);
+        i=p.re.lastIndex; matched=true; break;
+      }
+    }
+    if(!matched){ root.appendChild(document.createTextNode(text[i])); i++; }
+  }
+  return root;
+}
+
+/* ====== 原稿パース ====== */
+function parseInput(raw){
+  const lines=raw.replace(/\r\n?/g,"\n").split("\n");
+  if(lines.length<2) throw new Error("先頭2行（タイトル/固定キー）が不足しています。");
+  const title=lines[0].trim();
+  const key=lines[1].trim();
+  if(!title) throw new Error("タイトルが空です。");
+  if(!VALID_KEY.test(key)) throw new Error("固定キーが不正です。使用可能文字は [A-Za-z0-9_-] のみ。");
+
+  const pages={info:[], main:[], etc:[]};
+  const headsTree={info:[], main:[], etc:[]};
+  const stacks={info:[], main:[], etc:[]};
+  const taken={info:new Set(), main:new Set(), etc:new Set()};
+  let cur="main"; // 既定は main
+
+  // コードブロック状態
+  let inCode=false, codeFence=null, codeBuf=[];
+
+  const body=lines.slice(2);
+  for(let i=0;i<body.length;i++){
+    const line=body[i];
+
+    // ◆ ページ切替（無効な◆は本文扱い）
+    const mPage=line.match(/^◆\s*([^\s]+)\s*$/);
+    if(!inCode && mPage){
+      const nm=mPage[1];
+      if(nm==="info"||nm==="main"||nm==="etc"){ cur=nm; continue; }
+    }
+
+    // ``` / ''' コードフェンス
+    const mFence=line.match(/^(```|''')\s*([A-Za-z0-9#+.\-_]*)\s*$/);
+    if(mFence && !inCode){ inCode=true; codeFence=mFence[1]; codeBuf=[]; continue; }
+    if(mFence && inCode && mFence[1]===codeFence){
+      inCode=false;
+      const pre=makeEl("pre",{className:"code"},[
+        makeEl("button",{className:"copy",text:"copy"}),
+        makeEl("code",{},[document.createTextNode(codeBuf.join("\n"))])
+      ]);
+      pages[cur].push({type:"node", node:pre});
+      continue;
+    }
+    if(inCode){ codeBuf.push(line); continue; }
+
+    // 見出し（# の直後にスペース必須）
+    const mH=line.match(/^(#{1,3})\s+(.+?)\s*$/);
+    if(mH){
+      const level=mH[1].length;
+      let raw=mH[2];
+
+      // 行末タグ抽出（@メモは禁止）
+      const tagMatches=[...raw.matchAll(/\s@([^\s@]+)/g)].map(x=>x[1]);
+      raw = raw.replace(/\s@([^\s@]+)/g,"").trim();
+      const tags=[];
+      for(const t of tagMatches){
+        if(t==="メモ") throw new Error("@メモ は使用禁止です（変換器が自動付与）。");
+        if(t) tags.push(t);
+      }
+
+      // 親経路を path にまとめて安定ID生成（ASCII化）
+      while(stacks[cur].length && stacks[cur].at(-1).lvl>=level) stacks[cur].pop();
+      const parents=stacks[cur].map(n=>n.text);
+      const path=[...parents, raw].join(">");
+      const id=uniqueId("h-"+hashOf(path), taken[cur]);
+
+      // ツリー・スタック・ページ配列へ
+      const node={lvl:level, text:raw, id, children:[]};
+      if(stacks[cur].length) stacks[cur].at(-1).children.push(node); else headsTree[cur].push(node);
+      stacks[cur].push(node);
+
+      pages[cur].push({type:"h", level, text:raw, id, tags});
+      continue;
+    }
+
+    // 段落
+    pages[cur].push({type:"p", text:line});
+  }
+
+  // 経路辞書：page -> Map( 「大」「大>中」「大>中>小」 → id )
+  const dict={info:new Map(), main:new Map(), etc:new Map()};
+  for(const pg of ["info","main","etc"]){
+    (function walk(nodes, trail=[]){
+      for(const n of nodes){
+        const k1=n.text, k2=[...trail,n.text].join(">");
+        if(!dict[pg].has(k1)) dict[pg].set(k1, n.id); // 同名は先勝ち
+        dict[pg].set(k2, n.id);
+        if(n.children?.length) walk(n.children, [...trail,n.text]);
+      }
+    })(headsTree[pg], []);
+  }
+
+  return {title,key,pages,dict};
+}
+
+/* ====== template.html を読み込み＆差し込み ====== */
+async function buildHTML(parsed){
+  const tplText=await fetch("template.html").then(r=>{ if(!r.ok) throw new Error("template.html が読み込めませんでした。"); return r.text(); });
+  const doc=new DOMParser().parseFromString(tplText,"text/html");
+
+  // タイトル・キー
+  doc.title=parsed.title;
+  const metaKey=doc.querySelector('meta[name="trpg-key"]'); if(metaKey) metaKey.setAttribute("content", parsed.key);
+  const headerTitle=doc.querySelector("header .title"); if(headerTitle) headerTitle.textContent=parsed.title;
+
+  // ページへ流し込み
+  function mountPage(pageName, items){
+    const sec=doc.querySelector(`section.page[data-page="${pageName}"]`);
+    if(!sec) return; while(sec.firstChild) sec.removeChild(sec.firstChild);
+
+    for(const it of items){
+      if(it.type==="h"){
+        const tag = it.level===1?"h1":it.level===2?"h2":"h3";
+        const h=doc.createElement(tag);
+        h.dataset.id=it.id;
+        if(it.tags.length) h.dataset.tags=it.tags.join(" ");
+        h.appendChild(document.createTextNode(it.text));
+        sec.appendChild(h);
+      }else if(it.type==="p"){
+        const p=doc.createElement("p"); p.appendChild(formatInline(it.text)); sec.appendChild(p);
+      }else if(it.type==="node"){
+        sec.appendChild(it.node.cloneNode(true));
+      }
+    }
+  }
+  mountPage("info", parsed.pages.info);
+  mountPage("main", parsed.pages.main);
+  mountPage("etc",  parsed.pages.etc);
+
+  /* ===== 本文中のハッシュジャンプをリンク化（語境界のみ・見出し/コードは除外） =====
+     形式：
+       - ◆info#大##中###小  → <a href="#info:<id>">
+       - #大##中###小       → <a href="#<id>">（同ページ）
+  */
+  (function wireJumps(){
+    // テキストノードを走査（見出し/コード/メモは除外）
+    const walker=doc.createTreeWalker(doc.body, NodeFilter.SHOW_TEXT, {
+      acceptNode(n){
+        if(!n.nodeValue || !n.nodeValue.trim()) return NodeFilter.FILTER_REJECT;
+        const p=n.parentElement; if(!p) return NodeFilter.FILTER_REJECT;
+        if(p.closest("h1,h2,h3,pre,code,.code")) return NodeFilter.FILTER_REJECT;
+        return NodeFilter.FILTER_ACCEPT;
+      }
+    });
+
+    const toReplace=[];
+    while(walker.nextNode()){
+      const node=walker.currentNode, txt=node.nodeValue;
+      // ◆page#A##B###C  |  #A##B###C
+      const re=/(\s|^)(?:◆(info|main|etc))?#([^\s#]+)(?:##([^\s#]+))?(?:###([^\s#]+))?(\s|$)/gu;
+      let m,last=0,parts=[],touched=false;
+      const secPage = node.parentElement.closest("section.page")?.dataset.page || "main";
+
+      while((m=re.exec(txt))){
+        const left=m[1], page=m[2]||null, a=m[3], b=m[4], c=m[5], right=m[6];
+        const labels=[a,b,c].filter(Boolean).map(trimPunct);
+        const key=labels.join(">");
+
+        const targetPg = page || secPage;
+        const id = parsed.dict[targetPg].get(key) || parsed.dict[targetPg].get(labels.at(-1)) || null;
+
+        touched=true;
+        parts.push(document.createTextNode(txt.slice(last, m.index + left.length)));
+        if(id){
+          const aEl=doc.createElement("a");
+          aEl.setAttribute("href", page? ("#"+targetPg+":"+id) : ("#"+id)); // コロンは未エンコード
+          parts.push(aEl);
+        }else{
+          parts.push(document.createTextNode(txt.slice(m.index+left.length, re.lastIndex-right.length)));
+        }
+        last=re.lastIndex - right.length;
+      }
+      if(touched){
+        parts.push(document.createTextNode(txt.slice(last)));
+        const frag=doc.createDocumentFragment(); parts.forEach(p=>frag.appendChild(p));
+        node.parentNode.replaceChild(frag,node);
+      }
+    }
+  })();
+
+  // 出力
+  return "<!doctype html>\n"+doc.documentElement.outerHTML;
+}
+
+/* ====== Actions ====== */
+btnC.onclick=async ()=>{
+  try{
+    status.textContent="変換中…";
+    const parsed=parseInput(src.value||"");
+    const html=await buildHTML(parsed);
+    dst.value=html;
+    status.textContent="完了 ✔️";
+  }catch(err){
+    status.textContent="エラー ❗ "+(err?.message||err);
+  }
+};
+btnD.onclick=()=>{
+  const blob=new Blob([dst.value||""],{type:"text/html;charset=utf-8"});
+  const a=document.createElement("a"); a.href=URL.createObjectURL(blob); a.download="scenario.html"; a.click();
+  setTimeout(()=>URL.revokeObjectURL(a.href),1000);
+};
 })();
 </script>
 </body>
