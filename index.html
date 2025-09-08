@@ -54,8 +54,8 @@ const src=$("#src"), dst=$("#dst"), btnC=$("#btnConvert"), btnD=$("#btnDownload"
 
 /* ====== Utils（日本語対応版） ====== */
 const VALID_KEY=/^[A-Za-z0-9_-]+$/;
-// 末尾の句読点などはジャンプ照合から外す（#導入。→ #導入）
-const trimPunct=(s)=>s.replace(/[。、．，,.、。…!！?？）\)\]】」』>]+$/u,"");
+// 末尾の文字は削らない（見出しに含まれる可能性があるため）
+const trimPunct=(s)=>s;
 // 安定ハッシュ（djb2）→ base36（ASCII のみ）で ID 化
 function hashOf(s){ let h=5381; for(const ch of s){ h=((h<<5)+h)+ch.codePointAt(0); h|=0; } return (h>>>0).toString(36); }
 function uniqueId(base,taken){ let id=base, n=2; while(taken.has(id)) id=base+"-"+(n++); taken.add(id); return id; }
@@ -72,7 +72,7 @@ function makeEl(name, attrs={}, children=[]){
   return el;
 }
 
-/* ====== インライン装飾（textContentベースで安全） ====== */
+/* ====== インライン装飾 ====== */
 function formatInline(text){
   const root=document.createDocumentFragment();
   let i=0;
@@ -114,23 +114,20 @@ function parseInput(raw){
   const headsTree={info:[], main:[], etc:[]};
   const stacks={info:[], main:[], etc:[]};
   const taken={info:new Set(), main:new Set(), etc:new Set()};
-  let cur="main"; // 既定は main
+  let cur="main";
 
-  // コードブロック状態
   let inCode=false, codeFence=null, codeBuf=[];
 
   const body=lines.slice(2);
   for(let i=0;i<body.length;i++){
     const line=body[i];
 
-    // ◆ ページ切替（無効な◆は本文扱い）
     const mPage=line.match(/^◆\s*([^\s]+)\s*$/);
     if(!inCode && mPage){
       const nm=mPage[1];
       if(nm==="info"||nm==="main"||nm==="etc"){ cur=nm; continue; }
     }
 
-    // ``` / ''' コードフェンス
     const mFence=line.match(/^(```|''')\s*([A-Za-z0-9#+.\-_]*)\s*$/);
     if(mFence && !inCode){ inCode=true; codeFence=mFence[1]; codeBuf=[]; continue; }
     if(mFence && inCode && mFence[1]===codeFence){
@@ -144,13 +141,11 @@ function parseInput(raw){
     }
     if(inCode){ codeBuf.push(line); continue; }
 
-    // 見出し（# の直後にスペース必須）
     const mH=line.match(/^(#{1,3})\s+(.+?)\s*$/);
     if(mH){
       const level=mH[1].length;
       let raw=mH[2];
 
-      // 行末タグ抽出（@メモは禁止）
       const tagMatches=[...raw.matchAll(/\s@([^\s@]+)/g)].map(x=>x[1]);
       raw = raw.replace(/\s@([^\s@]+)/g,"").trim();
       const tags=[];
@@ -159,13 +154,11 @@ function parseInput(raw){
         if(t) tags.push(t);
       }
 
-      // 親経路を path にまとめて安定ID生成（ASCII化）
       while(stacks[cur].length && stacks[cur].at(-1).lvl>=level) stacks[cur].pop();
       const parents=stacks[cur].map(n=>n.text);
       const path=[...parents, raw].join(">");
       const id=uniqueId("h-"+hashOf(path), taken[cur]);
 
-      // ツリー・スタック・ページ配列へ
       const node={lvl:level, text:raw, id, children:[]};
       if(stacks[cur].length) stacks[cur].at(-1).children.push(node); else headsTree[cur].push(node);
       stacks[cur].push(node);
@@ -174,17 +167,15 @@ function parseInput(raw){
       continue;
     }
 
-    // 段落
     pages[cur].push({type:"p", text:line});
   }
 
-  // 経路辞書：page -> Map( 「大」「大>中」「大>中>小」 → id )
   const dict={info:new Map(), main:new Map(), etc:new Map()};
   for(const pg of ["info","main","etc"]){
     (function walk(nodes, trail=[]){
       for(const n of nodes){
         const k1=n.text, k2=[...trail,n.text].join(">");
-        if(!dict[pg].has(k1)) dict[pg].set(k1, n.id); // 同名は先勝ち
+        if(!dict[pg].has(k1)) dict[pg].set(k1, n.id);
         dict[pg].set(k2, n.id);
         if(n.children?.length) walk(n.children, [...trail,n.text]);
       }
@@ -199,12 +190,10 @@ async function buildHTML(parsed){
   const tplText=await fetch("template.html").then(r=>{ if(!r.ok) throw new Error("template.html が読み込めませんでした。"); return r.text(); });
   const doc=new DOMParser().parseFromString(tplText,"text/html");
 
-  // タイトル・キー
   doc.title=parsed.title;
   const metaKey=doc.querySelector('meta[name="trpg-key"]'); if(metaKey) metaKey.setAttribute("content", parsed.key);
   const headerTitle=doc.querySelector("header .title"); if(headerTitle) headerTitle.textContent=parsed.title;
 
-  // ページへ流し込み
   function mountPage(pageName, items){
     const sec=doc.querySelector(`section.page[data-page="${pageName}"]`);
     if(!sec) return; while(sec.firstChild) sec.removeChild(sec.firstChild);
@@ -228,13 +217,7 @@ async function buildHTML(parsed){
   mountPage("main", parsed.pages.main);
   mountPage("etc",  parsed.pages.etc);
 
-  /* ===== 本文中のハッシュジャンプをリンク化（語境界のみ・見出し/コードは除外） =====
-     形式：
-       - ◆info#大##中###小  → <a href="#info:<id>">
-       - #大##中###小       → <a href="#<id>">（同ページ）
-  */
   (function wireJumps(){
-    // テキストノードを走査（見出し/コード/メモは除外）
     const walker=doc.createTreeWalker(doc.body, NodeFilter.SHOW_TEXT, {
       acceptNode(n){
         if(!n.nodeValue || !n.nodeValue.trim()) return NodeFilter.FILTER_REJECT;
@@ -244,19 +227,16 @@ async function buildHTML(parsed){
       }
     });
 
-    const toReplace=[];
     while(walker.nextNode()){
       const node=walker.currentNode, txt=node.nodeValue;
-      // ◆page#A##B###C  |  #A##B###C
-      const re=/(\s|^)(?:◆(info|main|etc))?#([^\s#]+)(?:##([^\s#]+))?(?:###([^\s#]+))?(\s|$)/gu;
+      const RE=/(\s|^)(?:◆(info|main|etc))?#([^\s#]+)(?:##([^\s#]+))?(?:###([^\s#]+))?(?=\s|$)/gu;
       let m,last=0,parts=[],touched=false;
       const secPage = node.parentElement.closest("section.page")?.dataset.page || "main";
 
-      while((m=re.exec(txt))){
-        const left=m[1], page=m[2]||null, a=m[3], b=m[4], c=m[5], right=m[6];
+      while((m=RE.exec(txt))){
+        const left=m[1], page=m[2]||null, a=m[3], b=m[4], c=m[5];
         const labels=[a,b,c].filter(Boolean).map(trimPunct);
         const key=labels.join(">");
-
         const targetPg = page || secPage;
         const id = parsed.dict[targetPg].get(key) || parsed.dict[targetPg].get(labels.at(-1)) || null;
 
@@ -264,12 +244,12 @@ async function buildHTML(parsed){
         parts.push(document.createTextNode(txt.slice(last, m.index + left.length)));
         if(id){
           const aEl=doc.createElement("a");
-          aEl.setAttribute("href", page? ("#"+targetPg+":"+id) : ("#"+id)); // コロンは未エンコード
+          aEl.setAttribute("href", page? ("#"+targetPg+":"+id) : ("#"+id));
           parts.push(aEl);
         }else{
-          parts.push(document.createTextNode(txt.slice(m.index+left.length, re.lastIndex-right.length)));
+          parts.push(document.createTextNode(txt.slice(m.index+left.length, RE.lastIndex)));
         }
-        last=re.lastIndex - right.length;
+        last=RE.lastIndex;
       }
       if(touched){
         parts.push(document.createTextNode(txt.slice(last)));
@@ -279,7 +259,6 @@ async function buildHTML(parsed){
     }
   })();
 
-  // 出力
   return "<!doctype html>\n"+doc.documentElement.outerHTML;
 }
 
