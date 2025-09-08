@@ -24,39 +24,19 @@ pre.sample{white-space:pre-wrap;background:#fff;border:1px dashed #ddd;border-ra
     <button id="btnDownload">ダウンロード</button>
     <span id="status"><small class="note">同じフォルダの <code>template.html</code> を読み込みます。</small></span>
   </div>
-  <textarea id="src" placeholder="1行目=タイトル、2行目=固定キー（[A-Za-z0-9_-]）&#10;◆ main&#10;# 導入 @タグA&#10;本文…"></textarea>
-  <textarea id="dst" class="out" placeholder="ここに完成HTMLが出力されます"></textarea>
-  <details>
-    <summary>入力仕様のチートシート</summary>
-    <pre class="sample">『TRPGシナリオ（仮）』
-TRPG-scenario_01
-◆ info
-# このシナリオについて @概要 情報
-テキスト テキスト ◆ other は本文扱い
-◆ main
-# 導入 @導入
-導入本文 #導入##場面###小項 みたいなジャンプを適所で
-## 場面 @シーン 調査
-駅前での聞き込み。◆info#このシナリオについて にも飛べる
-### 古書店の店主 @NPC
-口数は少ないが鋭い。
-◆ etc
-# 付録 @付録
-…</pre>
-  </details>
+  <textarea id="src"></textarea>
+  <textarea id="dst" class="out"></textarea>
 </div>
 
 <script>
 (()=>{"use strict";
-/* ====== DOM ====== */
 const $=s=>document.querySelector(s);
 const src=$("#src"), dst=$("#dst"), btnC=$("#btnConvert"), btnD=$("#btnDownload"), status=$("#status");
 
-/* ====== Utils（日本語対応版） ====== */
 const VALID_KEY=/^[A-Za-z0-9_-]+$/;
-// 末尾の文字は削らない（見出しに含まれる可能性があるため）
+// 記号を削らない
 const trimPunct=(s)=>s;
-// 安定ハッシュ（djb2）→ base36（ASCII のみ）で ID 化
+
 function hashOf(s){ let h=5381; for(const ch of s){ h=((h<<5)+h)+ch.codePointAt(0); h|=0; } return (h>>>0).toString(36); }
 function uniqueId(base,taken){ let id=base, n=2; while(taken.has(id)) id=base+"-"+(n++); taken.add(id); return id; }
 
@@ -72,7 +52,6 @@ function makeEl(name, attrs={}, children=[]){
   return el;
 }
 
-/* ====== インライン装飾 ====== */
 function formatInline(text){
   const root=document.createDocumentFragment();
   let i=0;
@@ -101,14 +80,13 @@ function formatInline(text){
   return root;
 }
 
-/* ====== 原稿パース ====== */
 function parseInput(raw){
   const lines=raw.replace(/\r\n?/g,"\n").split("\n");
-  if(lines.length<2) throw new Error("先頭2行（タイトル/固定キー）が不足しています。");
+  if(lines.length<2) throw new Error("先頭2行が不足しています。");
   const title=lines[0].trim();
   const key=lines[1].trim();
   if(!title) throw new Error("タイトルが空です。");
-  if(!VALID_KEY.test(key)) throw new Error("固定キーが不正です。使用可能文字は [A-Za-z0-9_-] のみ。");
+  if(!VALID_KEY.test(key)) throw new Error("固定キーが不正です。");
 
   const pages={info:[], main:[], etc:[]};
   const headsTree={info:[], main:[], etc:[]};
@@ -145,12 +123,11 @@ function parseInput(raw){
     if(mH){
       const level=mH[1].length;
       let raw=mH[2];
-
       const tagMatches=[...raw.matchAll(/\s@([^\s@]+)/g)].map(x=>x[1]);
       raw = raw.replace(/\s@([^\s@]+)/g,"").trim();
       const tags=[];
       for(const t of tagMatches){
-        if(t==="メモ") throw new Error("@メモ は使用禁止です（変換器が自動付与）。");
+        if(t==="メモ") throw new Error("@メモは禁止です。");
         if(t) tags.push(t);
       }
 
@@ -185,7 +162,6 @@ function parseInput(raw){
   return {title,key,pages,dict};
 }
 
-/* ====== template.html を読み込み＆差し込み ====== */
 async function buildHTML(parsed){
   const tplText=await fetch("template.html").then(r=>{ if(!r.ok) throw new Error("template.html が読み込めませんでした。"); return r.text(); });
   const doc=new DOMParser().parseFromString(tplText,"text/html");
@@ -227,30 +203,40 @@ async function buildHTML(parsed){
       }
     });
 
+    const RE_XPAGE = /(\s|^)(?:◆(info|main|etc))#(.+?)(?:##(.+?))?(?:###(.+?))?(?=\s|$)/gu;
+    const RE_SAME  = /(\s|^)#(.+?)(?:##(.+?))?(?:###(.+?))?(?=\s|$)/gu;
+
     while(walker.nextNode()){
       const node=walker.currentNode, txt=node.nodeValue;
-      const RE=/(\s|^)(?:◆(info|main|etc))?#([^\s#]+)(?:##([^\s#]+))?(?:###([^\s#]+))?(?=\s|$)/gu;
-      let m,last=0,parts=[],touched=false;
+      let last=0,parts=[],touched=false;
       const secPage = node.parentElement.closest("section.page")?.dataset.page || "main";
 
-      while((m=RE.exec(txt))){
-        const left=m[1], page=m[2]||null, a=m[3], b=m[4], c=m[5];
-        const labels=[a,b,c].filter(Boolean).map(trimPunct);
-        const key=labels.join(">");
-        const targetPg = page || secPage;
-        const id = parsed.dict[targetPg].get(key) || parsed.dict[targetPg].get(labels.at(-1)) || null;
+      const doReplace=(regex,isCross)=>{
+        regex.lastIndex=0;
+        let m;
+        while((m=regex.exec(txt))){
+          touched=true;
+          const pre=m[1], page=isCross?m[2]:null;
+          const labels=isCross?[m[3],m[4],m[5]].filter(Boolean).map(trimPunct)
+                        :[m[2],m[3],m[4]].filter(Boolean).map(trimPunct);
+          const key=labels.join(">");
+          const targetPg = page || secPage;
+          const id = parsed.dict[targetPg].get(key) || parsed.dict[targetPg].get(labels.at(-1)) || null;
 
-        touched=true;
-        parts.push(document.createTextNode(txt.slice(last, m.index + left.length)));
-        if(id){
-          const aEl=doc.createElement("a");
-          aEl.setAttribute("href", page? ("#"+targetPg+":"+id) : ("#"+id));
-          parts.push(aEl);
-        }else{
-          parts.push(document.createTextNode(txt.slice(m.index+left.length, RE.lastIndex)));
+          parts.push(document.createTextNode(txt.slice(last, m.index + pre.length)));
+          if(id){
+            const aEl=doc.createElement("a");
+            aEl.setAttribute("href", page? ("#"+targetPg+":"+id) : ("#"+id));
+            parts.push(aEl);
+          }else{
+            parts.push(document.createTextNode(txt.slice(m.index+pre.length, regex.lastIndex)));
+          }
+          last=regex.lastIndex;
         }
-        last=RE.lastIndex;
-      }
+      };
+      doReplace(RE_XPAGE,true);
+      doReplace(RE_SAME,false);
+
       if(touched){
         parts.push(document.createTextNode(txt.slice(last)));
         const frag=doc.createDocumentFragment(); parts.forEach(p=>frag.appendChild(p));
@@ -262,7 +248,6 @@ async function buildHTML(parsed){
   return "<!doctype html>\n"+doc.documentElement.outerHTML;
 }
 
-/* ====== Actions ====== */
 btnC.onclick=async ()=>{
   try{
     status.textContent="変換中…";
@@ -270,9 +255,7 @@ btnC.onclick=async ()=>{
     const html=await buildHTML(parsed);
     dst.value=html;
     status.textContent="完了 ✔️";
-  }catch(err){
-    status.textContent="エラー ❗ "+(err?.message||err);
-  }
+  }catch(err){ status.textContent="エラー ❗ "+(err?.message||err); }
 };
 btnD.onclick=()=>{
   const blob=new Blob([dst.value||""],{type:"text/html;charset=utf-8"});
