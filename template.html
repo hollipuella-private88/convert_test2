@@ -428,16 +428,28 @@ document.addEventListener("click",async e=>{
   try{ await navigator.clipboard.writeText(code); b.classList.add("done"); b.textContent="copied ✓"; setTimeout(()=>{b.classList.remove("done"); b.textContent="copy";},900);}catch{ alert("copy failed"); }
 });
 
-/* ========= ハッシュリンク名補完 ========= */
-function parseHash(h){ const raw=decodeURIComponent(h.replace(/^#/,"")); if(!raw) return {id:"",page:null}; const m=raw.match(/^([a-zA-Z0-9_-]+):(.*)$/); return m?{page:m[1],id:m[2]}:{page:null,id:raw}; }
+/* ========= ハッシュリンク名補完 & 遷移 ========= */
+function parseHash(h){
+  const raw=decodeURIComponent(h.replace(/^#/,""));
+  if(!raw) return {id:"",page:null};
+  const m=raw.match(/^([a-zA-Z0-9_-]+):(.*)$/);
+  return m?{page:m[1],id:m[2]}:{page:null,id:raw};
+}
 function linkNames(){
   $$('a[href^="#"]', sc).forEach(a=>{
-    const {id,page} = parseHash(a.getAttribute("href"));
+    const href=a.getAttribute("href");
+    const {id,page} = parseHash(href);
     const ent = ID.get(id);
     if(ent){
-      if(!a.textContent.trim()){ a.textContent = ent.text; a.title = ent.text; }
-      // a.onclick ハンドラは不要。ハッシュはそのまま使う：
-      // location.hash = a.getAttribute("href");  ← カスタムするならこれ（encode不要）
+      if(!a.textContent.trim()){
+        a.textContent = ent.text;
+        a.title = ent.text;
+      }
+      // ここで明示的にハッシュ遷移（encodeしない）
+      a.addEventListener("click",(ev)=>{
+        ev.preventDefault();
+        location.hash = href; // "#id" または "#page:id" をそのまま
+      });
     }
   });
 }
