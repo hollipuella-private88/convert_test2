@@ -13,6 +13,7 @@ textarea{width:100%;min-height:38vh;padding:10px;border:1px solid #ddd;border-ra
 button{border:1px solid #ccc;border-radius:8px;background:#fff;padding:.5em .9em;cursor:pointer}
 .out{min-height:38vh}
 small.note{color:#666}
+pre.sample{white-space:pre-wrap;background:#fff;border:1px dashed #ddd;border-radius:8px;padding:8px}
 </style>
 </head>
 <body>
@@ -23,18 +24,39 @@ small.note{color:#666}
     <button id="btnDownload">ダウンロード</button>
     <span id="status"><small class="note">同じフォルダの <code>template.html</code> を読み込みます。</small></span>
   </div>
-  <textarea id="src"></textarea>
-  <textarea id="dst" class="out"></textarea>
+  <textarea id="src" placeholder="1行目=タイトル、2行目=固定キー（[A-Za-z0-9_-]）&#10;◆ main&#10;# 導入 @タグA&#10;本文…"></textarea>
+  <textarea id="dst" class="out" placeholder="ここに完成HTMLが出力されます"></textarea>
+  <details>
+    <summary>入力仕様のチートシート</summary>
+    <pre class="sample">『TRPGシナリオ（仮）』
+TRPG-scenario_01
+◆ info
+# このシナリオについて @概要 情報
+テキスト テキスト ◆ other は本文扱い
+◆ main
+# 導入 @導入
+導入本文 #導入##場面###小項 みたいなジャンプを適所で
+## 場面 @シーン 調査
+駅前での聞き込み。◆info#このシナリオについて にも飛べる
+### 古書店の店主 @NPC
+口数は少ないが鋭い。
+◆ etc
+# 付録 @付録
+…</pre>
+  </details>
 </div>
 
 <script>
 (()=>{"use strict";
+/* ====== DOM ====== */
 const $=s=>document.querySelector(s);
 const src=$("#src"), dst=$("#dst"), btnC=$("#btnConvert"), btnD=$("#btnDownload"), status=$("#status");
 
+/* ====== Utils（日本語対応版） ====== */
 const VALID_KEY=/^[A-Za-z0-9_-]+$/;
-const trimPunct=s=>s; // 記号は削らない
-
+// 末尾の文字は削らない（見出しに含まれる可能性があるため）
+const trimPunct=(s)=>s;
+// 安定ハッシュ（djb2）→ base36（ASCII のみ）で ID 化
 function hashOf(s){ let h=5381; for(const ch of s){ h=((h<<5)+h)+ch.codePointAt(0); h|=0; } return (h>>>0).toString(36); }
 function uniqueId(base,taken){ let id=base, n=2; while(taken.has(id)) id=base+"-"+(n++); taken.add(id); return id; }
 
@@ -50,6 +72,7 @@ function makeEl(name, attrs={}, children=[]){
   return el;
 }
 
+/* ====== インライン装飾 ====== */
 function formatInline(text){
   const root=document.createDocumentFragment();
   let i=0;
@@ -78,13 +101,14 @@ function formatInline(text){
   return root;
 }
 
+/* ====== 原稿パース ====== */
 function parseInput(raw){
   const lines=raw.replace(/\r\n?/g,"\n").split("\n");
-  if(lines.length<2) throw new Error("先頭2行が不足しています。");
+  if(lines.length<2) throw new Error("先頭2行（タイトル/固定キー）が不足しています。");
   const title=lines[0].trim();
   const key=lines[1].trim();
   if(!title) throw new Error("タイトルが空です。");
-  if(!VALID_KEY.test(key)) throw new Error("固定キーが不正です。");
+  if(!VALID_KEY.test(key)) throw new Error("固定キーが不正です。使用可能文字は [A-Za-z0-9_-] のみ。");
 
   const pages={info:[], main:[], etc:[]};
   const headsTree={info:[], main:[], etc:[]};
@@ -117,16 +141,16 @@ function parseInput(raw){
     }
     if(inCode){ codeBuf.push(line); continue; }
 
-    // 見出し判定 (# + 空白)
     const mH=line.match(/^(#{1,3})\s+(.+?)\s*$/);
     if(mH){
       const level=mH[1].length;
       let raw=mH[2];
+
       const tagMatches=[...raw.matchAll(/\s@([^\s@]+)/g)].map(x=>x[1]);
       raw = raw.replace(/\s@([^\s@]+)/g,"").trim();
       const tags=[];
       for(const t of tagMatches){
-        if(t==="メモ") throw new Error("@メモは禁止です。");
+        if(t==="メモ") throw new Error("@メモ は使用禁止です（変換器が自動付与）。");
         if(t) tags.push(t);
       }
 
@@ -143,7 +167,6 @@ function parseInput(raw){
       continue;
     }
 
-    // 残りは段落
     pages[cur].push({type:"p", text:line});
   }
 
@@ -162,6 +185,7 @@ function parseInput(raw){
   return {title,key,pages,dict};
 }
 
+/* ====== ジャンプ埋め込み ====== */
 function wireJumps(parsed, doc){
   const isReplaceScope = (el)=>{
     if(!el) return false;
@@ -169,75 +193,76 @@ function wireJumps(parsed, doc){
     return true;
   };
 
-  function parseJump(s, i, currentPage){
-    const N = s.length;
-    const isWhite = ch => /\s/.test(ch);
-    const atBoundaryLeft = (i===0) || isWhite(s[i-1]);
-    if(!atBoundaryLeft) return null;
+  function parseJump(s, i){
+    const N=s.length;
+    const isWhite=ch=>/\s/.test(ch);
+    const leftOK=(i===0)||isWhite(s[i-1]);
+    if(!leftOK) return null;
 
     let j=i, page=null;
     if(s[j]==="◆"){
-      const rest = s.slice(j+1);
-      if(rest.startsWith("info#")) { page="info"; j += 1 + "info".length; }
-      else if(rest.startsWith("main#")) { page="main"; j += 1 + "main".length; }
-      else if(rest.startsWith("etc#"))  { page="etc";  j += 1 + "etc".length;  }
+      const rest=s.slice(j+1);
+      if(rest.startsWith("info#")){ page="info"; j+=1+"info".length; }
+      else if(rest.startsWith("main#")){ page="main"; j+=1+"main".length; }
+      else if(rest.startsWith("etc#")) { page="etc";  j+=1+"etc".length; }
       else return null;
-      if(s[j] !== "#") return null;
-    }else if(s[j] === "#"){
-      page = null;
+      if(s[j]!=="#") return null;
+    }else if(s[j]==="#"){
+      page=null;
     }else return null;
 
     const labels=[];
     let k=j;
-    function readLabel(kStart){
-      let p = kStart;
-      while(p < N){
+    function readLabel(pos){
+      let p=pos;
+      while(p<N){
         if(isWhite(s[p])) break;
-        if(s[p]==="#" && (s.slice(p,p+2)==="##" || s.slice(p,p+3)==="###")) break;
+        if(s[p]==="#" && (s.slice(p,p+2)==="##"||s.slice(p,p+3)==="###")) break;
         p++;
       }
-      return s.slice(kStart, p);
+      return s.slice(pos,p);
     }
 
-    if(s[k] !== "#") return null;
-    let pos = k+1;
-    const l1 = readLabel(pos); if(!l1) return null;
-    pos += l1.length; labels.push(l1);
+    if(s[k]!=="#") return null;
+    let pos=k+1;
+    const l1=readLabel(pos); if(!l1) return null;
+    pos+=l1.length; labels.push(l1);
 
     if(s.slice(pos,pos+2)==="##"){ pos+=2; const l2=readLabel(pos); if(!l2) return null; pos+=l2.length; labels.push(l2); }
     if(s.slice(pos,pos+3)==="###"){ pos+=3; const l3=readLabel(pos); if(!l3) return null; pos+=l3.length; labels.push(l3); }
 
-    const atBoundaryRight=(pos>=N)||isWhite(s[pos]);
-    if(!atBoundaryRight) return null;
+    const rightOK=(pos>=N)||isWhite(s[pos]);
+    if(!rightOK) return null;
 
-    return { len: pos - i, page, labels };
+    return {len:pos-i,page,labels};
   }
 
   function transformTextNode(node){
     const txt=node.nodeValue;
     const frag=document.createDocumentFragment();
-    const parentSection=node.parentElement.closest("section.page");
-    const currentPage=parentSection?.dataset.page || "main";
+    const currentPage=node.parentElement.closest("section.page")?.dataset.page || "main";
 
     let i=0;
     while(i<txt.length){
       const ch=txt[i];
       if(ch!=="◆" && ch!=="#"){ frag.appendChild(document.createTextNode(ch)); i++; continue; }
 
-      const hit=parseJump(txt,i,currentPage);
+      const hit=parseJump(txt,i);
       if(!hit){ frag.appendChild(document.createTextNode(ch)); i++; continue; }
 
       const {page,labels,len}=hit;
-      const key=labels.join(">");
-      const targetPage=page||currentPage;
-      const id=parsed.dict[targetPage].get(key) || parsed.dict[targetPage].get(labels.at(-1)) || null;
+      const clean=labels.map(trimPunct);
+      const key=clean.join(">");
+      const target=page||currentPage;
+      const id = parsed.dict[target].get(key) || parsed.dict[target].get(clean.at(-1)) || null;
 
       if(id){
         const a=document.createElement("a");
-        a.setAttribute("href", page ? ("#"+targetPage+":"+id) : ("#"+id));
-        a.textContent=labels.join(" / ");
+        a.href = page? ("#"+target+":"+id) : ("#"+id);
+        a.textContent = clean.join(" / ");
         frag.appendChild(a);
       }else{
+        // 解決できない場合は原文のまま
         frag.appendChild(document.createTextNode(txt.slice(i,i+len)));
       }
       i+=len;
@@ -248,20 +273,20 @@ function wireJumps(parsed, doc){
   const tw=doc.createTreeWalker(doc.body, NodeFilter.SHOW_TEXT, {
     acceptNode(n){
       if(!n.nodeValue || !n.nodeValue.trim()) return NodeFilter.FILTER_REJECT;
-      const p=n.parentElement;
-      if(!p) return NodeFilter.FILTER_REJECT;
+      const p=n.parentElement; if(!p) return NodeFilter.FILTER_REJECT;
       return isReplaceScope(p)?NodeFilter.FILTER_ACCEPT:NodeFilter.FILTER_REJECT;
     }
   });
 
-  const toReplace=[];
-  while(tw.nextNode()) toReplace.push(tw.currentNode);
-  for(const n of toReplace){
+  const list=[];
+  while(tw.nextNode()) list.push(tw.currentNode);
+  for(const n of list){
     const frag=transformTextNode(n);
     n.parentNode.replaceChild(frag,n);
   }
 }
 
+/* ====== template.html を読み込み＆差し込み ====== */
 async function buildHTML(parsed){
   const tplText=await fetch("template.html").then(r=>{ if(!r.ok) throw new Error("template.html が読み込めませんでした。"); return r.text(); });
   const doc=new DOMParser().parseFromString(tplText,"text/html");
@@ -293,11 +318,13 @@ async function buildHTML(parsed){
   mountPage("main", parsed.pages.main);
   mountPage("etc",  parsed.pages.etc);
 
+  // ← ここで辞書を渡してジャンプ埋め込み
   wireJumps(parsed, doc);
 
   return "<!doctype html>\n"+doc.documentElement.outerHTML;
 }
 
+/* ====== Actions ====== */
 btnC.onclick=async ()=>{
   try{
     status.textContent="変換中…";
@@ -305,7 +332,9 @@ btnC.onclick=async ()=>{
     const html=await buildHTML(parsed);
     dst.value=html;
     status.textContent="完了 ✔️";
-  }catch(err){ status.textContent="エラー ❗ "+(err?.message||err); }
+  }catch(err){
+    status.textContent="エラー ❗ "+(err?.message||err);
+  }
 };
 btnD.onclick=()=>{
   const blob=new Blob([dst.value||""],{type:"text/html;charset=utf-8"});
