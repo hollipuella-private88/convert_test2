@@ -263,8 +263,12 @@ function renderTOC(area){
 
 /* ===== Tool Panel (TOC-like) ===== */
 function readConvertWords(){
-  try{ const obj=JSON.parse($("#convert-words")?.textContent||'{"words":[]}'); return Array.isArray(obj.words)?obj.words.filter(w=>w&&typeof w==="string"):[]; }
-  catch{ return []; }
+  try{
+    const els = document.querySelectorAll('#convert-words');
+    const el  = els[els.length - 1]; // 重複があっても最後＝最新
+    const obj = JSON.parse(el?.textContent || '{"words":[]}');
+    return Array.isArray(obj.words) ? obj.words.filter(w => w && typeof w === "string") : [];
+  }catch{ return []; }
 }
 function loadReplacerValues(){
   try{ const v=JSON.parse(localStorage.getItem(REPL_KEY)||"{}"); return v&&typeof v==="object"?v:{}; }catch{ return {}; }
@@ -373,45 +377,57 @@ function crumb(e){ const es=S.index.get(e.page)||[]; if(e.lvl===1) return e.page
 
 /* プレビュー（30文字）：本文＋コードも含める */
 function previewWithCode(e, limit=30){
-  const h=e.el; const L=h.tagName;
-  const stop=L==="H1"?/^(H1|H2|H3)$/:L==="H2"?/^(H2|H3)$/:/^H3$/;
-  let s = h.textContent.trim(); // 見出し自体も含める
-  let n=h.nextSibling;
-  while(n && s.length<limit){
-    if(n.nodeType===1){
-      if(stop.test(n.tagName)) break;
-      if(n.matches("pre.code")){
-        const code=n.querySelector("code"); if(code){ s += " " + code.innerText.trim(); }
-      }else{
-        s += " " + collectText(n,{includeCode:true});
+  const h = e.el;                    // 見出し要素
+  const L = h.tagName;
+  const stop = L==="H1" ? /^(H1|H2|H3)$/ : L==="H2" ? /^(H2|H3)$/ : /^H3$/;
+
+  // 見出しはスキップし、直後のノードから集める
+  let s = "";
+  let n = h.nextSibling;
+
+  while (n && s.length < limit) {
+    if (n.nodeType === 1) {
+      if (stop.test(n.tagName)) break;        // 次の同階層以上の見出しで止める
+      if (n.matches("pre.code")) {
+        const code = n.querySelector("code");
+        if (code) s += " " + code.innerText.trim();
+      } else {
+        s += " " + collectText(n, { includeCode: true });
       }
-    }else if(n.nodeType===3){
+    } else if (n.nodeType === 3) {
       s += " " + n.nodeValue.trim();
     }
-    n=n.nextSibling;
+    n = n.nextSibling;
   }
-  s = s.replace(/\s+/g," ").trim();
-  return s.slice(0,limit);
+  s = s.replace(/\s+/g, " ").trim();
+  return s.slice(0, limit);
 }
 
 function getHeadingRangeFragment(e){
-  const h=e.el; const L=h.tagName;
-  const stop=L==="H1"?/^(H1|H2|H3)$/:L==="H2"?/^(H2|H3)$/:/^H3$/;
-  const frag=document.createDocumentFragment();
-  let n=h.cloneNode(true);
-  frag.appendChild(n);
-  let cur=h.nextSibling;
-  while(cur){
-    if(cur.nodeType===1){
-      if(stop.test(cur.tagName)) break;
+  const h = e.el;
+  const L = h.tagName;
+  const stop = L==="H1" ? /^(H1|H2|H3)$/ : L==="H2" ? /^(H2|H3)$/ : /^H3$/;
+
+  const frag = document.createDocumentFragment();
+
+  // 見出しはクローンしない。直後のノードから収集
+  let cur = h.nextSibling;
+  while (cur) {
+    if (cur.nodeType === 1) {
+      if (stop.test(cur.tagName)) break;
       frag.appendChild(cur.cloneNode(true));
-    }else if(cur.nodeType===3){
-      const span=document.createElement("span"); span.textContent=cur.nodeValue; frag.appendChild(span);
+    } else if (cur.nodeType === 3) {
+      const span = document.createElement("span");
+      span.textContent = cur.nodeValue;
+      frag.appendChild(span);
     }
-    cur=cur.nextSibling;
+    cur = cur.nextSibling;
   }
-  frag.querySelectorAll(".note").forEach(s=>{ s.replaceWith(s.cloneNode(true)); });
-  frag.querySelectorAll("pre.code .copy").forEach(b=>b.remove());
+
+  // インタラクティブ要素の無効化
+  frag.querySelectorAll(".note").forEach(s => { s.replaceWith(s.cloneNode(true)); });
+  frag.querySelectorAll("pre.code .copy").forEach(b => b.remove());
+
   return frag;
 }
 function makeCard(e, ws){
