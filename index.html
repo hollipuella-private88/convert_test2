@@ -143,7 +143,7 @@ function formatParagraph(text, currentPage, dict){
     if(id){
       const a=document.createElement("a");
       a.href = page ? ("#"+target+":"+id) : ("#"+id);
-      a.textContent = labs.join(" / ");
+      a.textContent = labs.at(-1);  // 最下位の見出しのみ表記
       frag.appendChild(a);
     }else{
       // 見つからなければ原文をそのまま（失敗が見て分かる）
