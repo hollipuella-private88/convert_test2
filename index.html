@@ -13,7 +13,6 @@ textarea{width:100%;min-height:38vh;padding:10px;border:1px solid #ddd;border-ra
 button{border:1px solid #ccc;border-radius:8px;background:#fff;padding:.5em .9em;cursor:pointer}
 .out{min-height:38vh}
 small.note{color:#666}
-pre.sample{white-space:pre-wrap;background:#fff;border:1px dashed #ddd;border-radius:8px;padding:8px}
 </style>
 </head>
 <body>
@@ -30,22 +29,15 @@ pre.sample{white-space:pre-wrap;background:#fff;border:1px dashed #ddd;border-ra
 
 <script>
 (()=>{"use strict";
-/* ===== DOM ===== */
 const $=s=>document.querySelector(s);
 const src=$("#src"), dst=$("#dst"), btnC=$("#btnConvert"), btnD=$("#btnDownload"), status=$("#status");
 
-/* ===== Utils ===== */
-// 固定キー
 const VALID_KEY=/^[A-Za-z0-9_-]+$/;
-// 記号は削らない（見出し文字列に含まれるため）
-const keep=(s)=>s;
-// 安定ハッシュ（djb2）→ base36
+const keep=s=>s; // 記号を削らない
 function hashOf(s){ let h=5381; for(const ch of s){ h=((h<<5)+h)+ch.codePointAt(0); h|=0; } return (h>>>0).toString(36); }
 function uniqueId(base,taken){ let id=base, n=2; while(taken.has(id)) id=base+"-"+(n++); taken.add(id); return id; }
 
-/* ===== インライン装飾 =====
-   文字列 -> DocumentFragment（bold/em/u/s のみ、textContent で安全）
-*/
+/* インライン装飾 */
 function applyInlineMarks(str){
   const root=document.createDocumentFragment();
   let i=0;
@@ -73,16 +65,10 @@ function applyInlineMarks(str){
   return root;
 }
 
-/* ===== 段落内：ハッシュジャンプ → <a> 生成 =====
-   - 左境界: 行頭 or 空白
-   - 右境界: 空白 or 行末
-   - 形: #大##中###小 / ◆(info|main|etc)#大##中###小
-   - 見出しテキストは削らない
-*/
+/* 段落内：ジャンプ → <a>（最下位の見出し名のみ表示） */
 function formatParagraph(text, currentPage, dict){
   const frag=document.createDocumentFragment();
-  const N=text.length;
-  const isWhite=ch=>/\s/.test(ch);
+  const N=text.length; const isWhite=ch=>/\s/.test(ch);
 
   function parseJump(s,i){
     const leftOK=(i===0)||isWhite(s[i-1]);
@@ -100,7 +86,7 @@ function formatParagraph(text, currentPage, dict){
     }else return null;
 
     const labels=[];
-    let k=j; // '#' の位置
+    let k=j;
     function readLabel(pos){
       let p=pos;
       while(p<N){
@@ -116,7 +102,6 @@ function formatParagraph(text, currentPage, dict){
     pos+=l1.length; labels.push(l1);
     if(s.slice(pos,pos+2)==="##"){ pos+=2; const l2=readLabel(pos); if(!l2) return null; pos+=l2.length; labels.push(l2); }
     if(s.slice(pos,pos+3)==="###"){ pos+=3; const l3=readLabel(pos); if(!l3) return null; pos+=l3.length; labels.push(l3); }
-
     const rightOK=(pos>=N)||isWhite(s[pos]); if(!rightOK) return null;
     return {len:pos-i, page, labels};
   }
@@ -131,22 +116,18 @@ function formatParagraph(text, currentPage, dict){
     const hit=parseJump(text,i);
     if(!hit){ buf+=ch; i++; continue; }
 
-    // 直前までのテキストを装飾反映
     flushBuf();
-
     const {page,labels,len}=hit;
     const labs=labels.map(keep);
-    const key=labs.join(">");
-    const target=page || currentPage;
+    const key=labs.join(">"); const target=page||currentPage;
     const id = dict[target].get(key) || dict[target].get(labs.at(-1)) || null;
 
     if(id){
       const a=document.createElement("a");
       a.href = page ? ("#"+target+":"+id) : ("#"+id);
-      a.textContent = labs.at(-1);  // 最下位の見出しのみ表記
+      a.textContent = labs.at(-1); // ★ 最下位のみ表示
       frag.appendChild(a);
     }else{
-      // 見つからなければ原文をそのまま（失敗が見て分かる）
       frag.appendChild(applyInlineMarks(text.slice(i,i+len)));
     }
     i+=len;
@@ -155,7 +136,17 @@ function formatParagraph(text, currentPage, dict){
   return frag;
 }
 
-/* ===== プレーンテキスト → 中間構造 ===== */
+/* ページ区切りの堅牢検出（全角空白・大小混在OK） */
+function detectPageMarker(line){
+  const m = line
+    .replace(/\r/g,"")
+    .replace(/[ \t\u3000]+/g, " ")
+    .trim()
+    .match(/^◆\s*(info|main|etc)$/i);
+  return m ? m[1].toLowerCase() : null;
+}
+
+/* 原稿パース */
 function parseInput(raw){
   const lines=raw.replace(/\r\n?/g,"\n").split("\n");
   if(lines.length<2) throw new Error("先頭2行（タイトル/固定キー）が不足しています。");
@@ -176,15 +167,9 @@ function parseInput(raw){
   for(let i=0;i<body.length;i++){
     const line=body[i];
 
-    // ページ切替
-    const mPage=line.match(/^◆\s*([^\s]+)\s*$/);
-    if(!inCode && mPage){
-      const nm=mPage[1];
-      if(nm==="info"||nm==="main"||nm==="etc"){ cur=nm; continue; }
-      // それ以外は段落扱いに落とす
-    }
+    const p = !inCode && detectPageMarker(line);
+    if(p){ cur=p; continue; }
 
-    // コードフェンス
     const mFence=line.match(/^(```|''')\s*([A-Za-z0-9#+.\-_]*)\s*$/);
     if(mFence && !inCode){ inCode=true; codeFence=mFence[1]; codeBuf=[]; continue; }
     if(mFence && inCode && mFence[1]===codeFence){
@@ -194,7 +179,6 @@ function parseInput(raw){
     }
     if(inCode){ codeBuf.push(line); continue; }
 
-    // 見出し (# + 空白)
     const mH=line.match(/^(#{1,3})\s+(.+?)\s*$/);
     if(mH){
       const level=mH[1].length;
@@ -212,7 +196,7 @@ function parseInput(raw){
 
       while(stacks[cur].length && stacks[cur].at(-1).lvl>=level) stacks[cur].pop();
       const parentTrail=stacks[cur].map(n=>n.text);
-      const path=[...parentTrail, raw].join(">");    // ← 階層パスをそのまま
+      const path=[...parentTrail, raw].join(">");
       const id=uniqueId("h-"+hashOf(path), taken[cur]);
 
       const node={lvl:level, text:raw, id, children:[]};
@@ -223,11 +207,9 @@ function parseInput(raw){
       continue;
     }
 
-    // 段落
     pages[cur].push({type:"p", text:line});
   }
 
-  // 見出し辞書（ページ別）
   const dict={info:new Map(), main:new Map(), etc:new Map()};
   for(const pg of ["info","main","etc"]){
     (function walk(nodes, trail=[]){
@@ -243,21 +225,18 @@ function parseInput(raw){
   return {title:key?title:title, key, pages, dict};
 }
 
-/* ===== template.html に差し込み ===== */
+/* template.html へ差し込み */
 async function buildHTML(parsed){
   const tplText=await fetch("template.html").then(r=>{ if(!r.ok) throw new Error("template.html が読み込めませんでした。"); return r.text(); });
   const doc=new DOMParser().parseFromString(tplText,"text/html");
 
-  // タイトル／固定キー
   doc.title=parsed.title;
   const metaKey=doc.querySelector('meta[name="trpg-key"]'); if(metaKey) metaKey.setAttribute("content", parsed.key);
   const headerTitle=doc.querySelector("header .title"); if(headerTitle) headerTitle.textContent=parsed.title;
 
-  // ページ描画
   function mountPage(pageName, items){
     const sec=doc.querySelector(`section.page[data-page="${pageName}"]`);
-    if(!sec) return;
-    while(sec.firstChild) sec.removeChild(sec.firstChild);
+    if(!sec) return; while(sec.firstChild) sec.removeChild(sec.firstChild);
 
     for(const it of items){
       if(it.type==="h"){
@@ -269,7 +248,7 @@ async function buildHTML(parsed){
         sec.appendChild(h);
       }else if(it.type==="p"){
         const p=doc.createElement("p");
-        p.appendChild(formatParagraph(it.text, pageName, parsed.dict)); // ← 段落時にジャンプ変換まで完了
+        p.appendChild(formatParagraph(it.text, pageName, parsed.dict)); // 段落時にジャンプ変換
         sec.appendChild(p);
       }else if(it.type==="node" && it.node?.kind==="code"){
         const pre=doc.createElement("pre"); pre.className="code";
@@ -279,28 +258,24 @@ async function buildHTML(parsed){
       }
     }
   }
-
   mountPage("info", parsed.pages.info);
   mountPage("main", parsed.pages.main);
   mountPage("etc",  parsed.pages.etc);
 
-  // 完成HTML
   return "<!doctype html>\n"+doc.documentElement.outerHTML;
 }
 
-/* ===== 操作系 ===== */
-btnConvert.onclick = btnC.onclick = async ()=>{
+/* UI */
+btnC.onclick=async ()=>{
   try{
     status.textContent="変換中…";
     const parsed=parseInput(src.value||"");
     const html=await buildHTML(parsed);
     dst.value=html;
     status.textContent="完了 ✔️";
-  }catch(err){
-    status.textContent="エラー ❗ "+(err?.message||err);
-  }
+  }catch(err){ status.textContent="エラー ❗ "+(err?.message||err); }
 };
-btnDownload.onclick = btnD.onclick = ()=>{
+btnD.onclick=()=>{
   const blob=new Blob([dst.value||""],{type:"text/html;charset=utf-8"});
   const a=document.createElement("a"); a.href=URL.createObjectURL(blob); a.download="scenario.html"; a.click();
   setTimeout(()=>URL.revokeObjectURL(a.href),1000);
