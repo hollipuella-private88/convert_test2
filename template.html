@@ -58,7 +58,7 @@ nav.tabs{position:sticky;inset-block-end:0;block-size:var(--tabs);display:grid;g
 .card .title{font-weight:700;margin:.2em 0}
 .card .content .cont{display:none}.card .content .dots{display:inline}
 .card.open .content .cont{display:inline}.card.open .content .dots{display:none}
-/* full content cloned from body */
+/* full content cloned/expanded */
 .card .full{margin-top:6px;border-top:1px dashed #eee;padding-top:6px}
 .card .full .note{background:#e7f1ff;border-radius:3px;padding:.05em .15em} /* 見た目は同じだがクリック不可 */
 
@@ -152,6 +152,8 @@ let S={page:"info",index:new Map(),tags:new Set()}, ALL=[], ENT=new Map(), ID=ne
 
 /* drawers & buttons */
 const updIcon=()=>{ btnS.textContent=sea.classList.contains("open")?"▶":"◀"; };
+
+// ドロワー閉じ時、文字変換の入力値を強制回収して適用
 function flushToolInputs(){
   const inputs = document.querySelectorAll('#tocArea .input-box');
   let changed = false;
@@ -167,6 +169,7 @@ function flushToolInputs(){
   });
   if (changed) stateTool.dirty = true;
 }
+
 const setOpen=(el,on)=>{
   el.classList.toggle("open",!!on);
   if(el===sea) updIcon();
@@ -388,7 +391,8 @@ function search(){
   const raw=words(q.value), tokens=normalizeQueryTokens(raw);
   const tag=($(".chip.on")?.dataset.v)||"all", cont=$("#res"); cont.innerHTML="";
   if(tag==="all" && tokens.length===0){
-    return renderVirtual([...(S.index.get("info")||[]),...(S.index.get("main")||[]),...(S.index.get("etc")||[])].filter(e=>e.kind!=="memo"),[],true);
+    return renderVirtual([...(S.index.get("info")||[]),...(S.index.get("main")||[]),...(S.index.get("etc")||[])].
+      filter(e=>e.kind!=="memo"),[],true);
   }
   const hits=ALL.filter(e=>tokens.every(w=>(e.scope||"").toLowerCase().includes(w)) && (tag==="all" || e.tags?.includes(tag)));
   const idset=new Set(hits.map(h=>h.id));
@@ -461,8 +465,10 @@ function getHeadingRangeFragment(e, offsetChars=0){
 function makeCard(e, ws){
   const card=document.createElement("div"); card.className="card";
   const meta=document.createElement("div"); meta.className="meta";
-  const jb=document.createElement("button"); jb.type="button"; jb.textContent="ジャンプ"; jb.className="btn"; jb.onclick=(ev)=>{ev.stopPropagation(); jump(e,ws);};
-  const ttl=document.createElement("div"); ttl.className="title"; ttl.textContent = (e.kind==="memo" ? "［メモ］"+(e.sel?e.sel.slice(0,30):"") : e.text);
+  const jb=document.createElement("button"); jb.type="button"; jb.textContent="ジャンプ"; jb.className="btn";
+  jb.onclick=(ev)=>{ev.stopPropagation(); jump(e,ws);};
+  const ttl=document.createElement("div"); ttl.className="title";
+  ttl.textContent = (e.kind==="memo" ? "［メモ］"+(e.sel?e.sel.slice(0,30):"") : e.text);
   const content=document.createElement("div"); content.className="content";
 
   const prevText = previewWithCode(e, 30);
@@ -592,7 +598,7 @@ function openNote({range,node}){
   }
   pop.append(head,prev,ta,act); document.body.appendChild(pop);
   const rect=(range?range.getBoundingClientRect():node.getBoundingClientRect());
-  requestAnimationFrame(()=>{ placePop(pop,rect,"below"); pop.focus(); ta.focus(); });
+  requestAnimationFrame(()=>{ placePop(pop,rect,"below"); pop.focus(); });
   cn.onclick=()=>closePop();
   sv.onclick=()=>{
     if(node){ node.dataset.note=ta.value.trim(); closePop(); persistNotes(); buildIndex(); buildChips(); search(); }
@@ -684,14 +690,15 @@ function buildSnapshot(){
   }});
   while(tw.nextNode()) snapshot.push({node:tw.currentNode, text:tw.currentNode.nodeValue});
 }
+// 全文一致置換（コード/メモは別で除外）
 function replaceInString(s){
   if(!s) return s;
   const vals=stateTool.values||loadReplacerValues();
-  const entries=Object.entries(vals).filter(([k,v])=>v && v.length>0);
+  const entries=Object.entries(vals).filter(([k,v])=>typeof v==="string");
   if(!entries.length) return s;
   for(const [k,v] of entries){
-    const re=new RegExp(`(^|\\s)(${k.replace(/[.*+?^${}()|[\\]\\\\]/g,"\\$&")})(?=\\s|$)`,"g");
-    s=s.replace(re,(m,pre)=>pre+v);
+    const re=new RegExp(k.replace(/[.*+?^${}()|[\]\\]/g,"\\$&"),"g");
+    s=s.replace(re,v);
   }
   return s;
 }
@@ -707,7 +714,7 @@ function replaceInNodeTree(root){
 function applyReplacements(){
   if(!snapshot.length) buildSnapshot();
   const vals=stateTool.values||loadReplacerValues();
-  const entries=Object.entries(vals).filter(([k,v])=>v && v.length>0);
+  const entries=Object.entries(vals).filter(([k,v])=>typeof v==="string"&&v.length>=0);
   if(!entries.length){
     snapshot.forEach(s=>{ if(s.node.nodeValue!==s.text) s.node.nodeValue=s.text; });
     return;
