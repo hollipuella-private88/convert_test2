@@ -181,12 +181,19 @@ async function buildHTML(parsed){
   };
   mount("info",parsed.pages.info); mount("main",parsed.pages.main); mount("etc",parsed.pages.etc);
 
-  // ◆ convert → JSON を埋め込み（template 側が読む）
-  const dataScript=doc.createElement("script");
-  dataScript.type="application/json";
-  dataScript.id="convert-words";
-  dataScript.textContent=JSON.stringify({words:parsed.convertWords}, null, 0);
-  doc.body.appendChild(dataScript);
+// ◆ convert → JSON を埋め込み（template 側が読む）
+// 既存があれば置換、無ければ新規作成（重複防止）
+const data = JSON.stringify({ words: parsed.convertWords }, null, 0);
+let holder = doc.querySelector('#convert-words');
+if (holder) {
+  holder.textContent = data;
+} else {
+  holder = doc.createElement('script');
+  holder.type = 'application/json';
+  holder.id = 'convert-words';
+  holder.textContent = data;
+  doc.body.appendChild(holder);
+}
 
   return "<!doctype html>\n"+doc.documentElement.outerHTML;
 }
