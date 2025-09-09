@@ -158,7 +158,7 @@ function switchPage(p){
 /* ========= 章構造抽出 ========= */
 function heads(sec){
   const hs=$$("h1,h2,h3",sec).map(h=>{
-    if(h.dataset.id&&!h.id)h.id=h.dataset.id;
+    if(h.dataset.id&&!h.id)h.id=h.dataset.id; // data-id→id もサポート
     return {el:h,l:+h.tagName.slice(1),id:h.dataset.id||h.id,text:h.textContent.trim(),
             tags:(h.dataset.tags||"").split(/\s+/).filter(Boolean),children:[],parent:null,page:sec.dataset.page};
   });
@@ -300,22 +300,21 @@ function buildChips(){
   });
 }
 
+/* 見出し本文のみを対象（.note は除外）。メモは「メモ」タグ選択時のみ出る */
 function search(){
   const ws=words(q.value), tag=($(".chip.on")?.dataset.v)||"all", cont=$("#res");
   cont.innerHTML="";
-  // 全件（all＆空検索）は見出しのみを表示
   if(tag==="all" && ws.length===0){
     const list=[...(S.index.get("info")||[]),...(S.index.get("main")||[]),...(S.index.get("etc")||[])]
       .filter(e=>e.kind!=="memo");
     return renderVirtual(list,[],true);
   }
-  // AND検索
   const hits=ALL.filter(e=>{
     const ok=ws.every(w=>(e.scope||"").toLowerCase().includes(w));
-    const tagOk=(tag==="all") || (e.tags?.includes(tag)); // 「メモ」はメモ専用タグ
+    const tagOk=(tag==="all") || (e.tags?.includes(tag));
     return ok && tagOk;
   });
-  // 見出し vs 子孫見出しの重複抑制（メモは抑制対象外）
+  // 見出し vs 子孫見出しの重複抑制（メモは抑制しない）
   const idset=new Set(hits.map(h=>h.id));
   const filtered=hits.filter(e=>{
     const d=e.descendants||new Set();
@@ -403,11 +402,39 @@ function highlight(el,ws){
   });
 }
 
-/* ========= ジャンプ（メモは選択位置へ） ========= */
+/* ========= ハッシュ（#id / #page:id）対応 ========= */
+/* 変換器が <a href="#..."> を埋めるので、template は “飛ぶだけ”。 */
+function parseHash(h){
+  const raw=decodeURIComponent(h.replace(/^#/,""));
+  if(!raw) return {id:"",page:null};
+  const m=raw.match(/^([A-Za-z0-9_-]+):(.*)$/);
+  return m?{page:m[1],id:m[2]}:{page:null,id:raw};
+}
+addEventListener("hashchange",()=>{
+  const {id,page}=parseHash(location.hash);
+  if(!id) return;
+  const ent=ID.get(id); if(!ent) return;
+  const targetPage=page||ent.page;
+  const act=()=>{ const sec=pages.find(p=>p.dataset.page===targetPage);
+    (sec.querySelector('[data-id="'+CSS.escape(id)+'"],#'+CSS.escape(id))||ent.el).scrollIntoView({block:"start",behavior:"smooth"}); };
+  if(targetPage!==S.page){ switchPage(targetPage); requestAnimationFrame(act);} else act();
+});
+/* 空テキストのアンカーだけ、見出し名で補完（変換器は通常テキストを埋める） */
+function linkNames(){
+  $$('a[href^="#"]',sc).forEach(a=>{
+    if(a.textContent.trim()) return;
+    const {id,page}=parseHash(a.getAttribute("href"));
+    const ent=ID.get(id); if(!ent) return;
+    a.textContent=ent.text; a.title=ent.text;
+    a.addEventListener("click",ev=>{ev.preventDefault(); location.hash="#"+encodeURIComponent((page||ent.page)+":"+id);},{once:true});
+  });
+}
+
+/* ========= ジャンプ（検索カード/TOC用。メモは選択位置へ） ========= */
 function jump(e,ws){
   const go=()=>{ e.el.scrollIntoView({block:"center",behavior:"smooth"});
     clearHL(); if(ws.length && e.kind!=="memo"){ highlight(e.el,ws); ($(".hl-tmp")||e.el).scrollIntoView({block:"center",behavior:"smooth"}); }
-    if(MOBILE()) setOpen(sea,false);
+    if(MOBILE()) sea.classList.remove("open");
   };
   if(e.page!==S.page){
     switchPage(e.page);
@@ -425,42 +452,9 @@ function jump(e,ws){
 document.addEventListener("click",async e=>{
   const b=e.target.closest(".code .copy"); if(!b) return;
   const code=b.parentElement.querySelector("code").innerText;
-  try{ await navigator.clipboard.writeText(code); b.classList.add("done"); b.textContent="copied ✓"; setTimeout(()=>{b.classList.remove("done"); b.textContent="copy";},900);}catch{ alert("copy failed"); }
-});
-
-/* ========= ハッシュリンク名補完 & 遷移 ========= */
-function parseHash(h){
-  const raw=decodeURIComponent(h.replace(/^#/,""));
-  if(!raw) return {id:"",page:null};
-  const m=raw.match(/^([a-zA-Z0-9_-]+):(.*)$/);
-  return m?{page:m[1],id:m[2]}:{page:null,id:raw};
-}
-function linkNames(){
-  $$('a[href^="#"]', sc).forEach(a=>{
-    const href=a.getAttribute("href");
-    const {id,page} = parseHash(href);
-    const ent = ID.get(id);
-    if(ent){
-      if(!a.textContent.trim()){
-        a.textContent = ent.text;
-        a.title = ent.text;
-      }
-      // ここで明示的にハッシュ遷移（encodeしない）
-      a.addEventListener("click",(ev)=>{
-        ev.preventDefault();
-        location.hash = href; // "#id" または "#page:id" をそのまま
-      });
-    }
-  });
-}
-addEventListener("hashchange",()=>{
-  const {id,page}=parseHash(location.hash);
-  if(!id) return;
-  const ent=ID.get(id); if(!ent) return;
-  const targetPage=page||ent.page;
-  const act=()=>{ const sec=pages.find(p=>p.dataset.page===targetPage);
-    (sec.querySelector('[data-id="'+CSS.escape(id)+'"],#'+CSS.escape(id))||ent.el).scrollIntoView({block:"start",behavior:"smooth"}); };
-  if(targetPage!==S.page){ switchPage(targetPage); requestAnimationFrame(act);} else act();
+  try{ await navigator.clipboard.writeText(code); b.classList.add("done"); b.textContent="copied ✓";
+       setTimeout(()=>{b.classList.remove("done"); b.textContent="copy";},900); }
+  catch{ alert("copy failed"); }
 });
 
 /* ========= メモ（追加／編集／削除） ========= */
@@ -606,7 +600,7 @@ function restoreNotes(){
 /* ========= 全メモ削除 ========= */
 function clearAllNotes(){ pages.forEach(sec=>{ $$(".note",sec).forEach(unwrap); }); try{ localStorage.removeItem(MEMO_KEY);}catch{} }
 
-/* ========= コードボックス化 ========= */
+/* ========= コードボックス化（変換器が出力していない場合のみ） ========= */
 function autoBoxCodes(){ $$("pre:not(.code)>code",sc).forEach(c=>{const p=c.parentElement;p.classList.add("code");const b=document.createElement("button");b.className="copy";b.textContent="copy";p.insertBefore(b,c);}); }
 
 /* ========= 初期化 ========= */
