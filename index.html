@@ -162,6 +162,106 @@ function parseInput(raw){
   return {title,key,pages,dict};
 }
 
+function wireJumps(parsed, doc){
+  const isReplaceScope = (el)=>{
+    if(!el) return false;
+    if(el.closest("h1,h2,h3,pre,code,.code")) return false;
+    return true;
+  };
+
+  function parseJump(s, i, currentPage){
+    const N = s.length;
+    const isWhite = ch => /\s/.test(ch);
+    const atBoundaryLeft = (i===0) || isWhite(s[i-1]);
+    if(!atBoundaryLeft) return null;
+
+    let j=i, page=null;
+    if(s[j]==="◆"){
+      const rest = s.slice(j+1);
+      if(rest.startsWith("info#")) { page="info"; j += 1 + "info".length; }
+      else if(rest.startsWith("main#")) { page="main"; j += 1 + "main".length; }
+      else if(rest.startsWith("etc#"))  { page="etc";  j += 1 + "etc".length;  }
+      else return null;
+      if(s[j] !== "#") return null;
+    }else if(s[j] === "#"){
+      page = null;
+    }else return null;
+
+    const labels=[];
+    let k=j;
+    function readLabel(kStart){
+      let p = kStart;
+      while(p < N){
+        if(isWhite(s[p])) break;
+        if(s[p]==="#" && (s.slice(p,p+2)==="##" || s.slice(p,p+3)==="###")) break;
+        p++;
+      }
+      return s.slice(kStart, p);
+    }
+
+    if(s[k] !== "#") return null;
+    let pos = k+1;
+    const l1 = readLabel(pos); if(!l1) return null;
+    pos += l1.length; labels.push(l1);
+
+    if(s.slice(pos,pos+2)==="##"){ pos+=2; const l2=readLabel(pos); if(!l2) return null; pos+=l2.length; labels.push(l2); }
+    if(s.slice(pos,pos+3)==="###"){ pos+=3; const l3=readLabel(pos); if(!l3) return null; pos+=l3.length; labels.push(l3); }
+
+    const atBoundaryRight=(pos>=N)||isWhite(s[pos]);
+    if(!atBoundaryRight) return null;
+
+    return { len: pos - i, page, labels };
+  }
+
+  function transformTextNode(node){
+    const txt=node.nodeValue;
+    const frag=document.createDocumentFragment();
+    const parentSection=node.parentElement.closest("section.page");
+    const currentPage=parentSection?.dataset.page || "main";
+
+    let i=0;
+    while(i<txt.length){
+      const ch=txt[i];
+      if(ch!=="◆" && ch!=="#"){ frag.appendChild(document.createTextNode(ch)); i++; continue; }
+
+      const hit=parseJump(txt,i,currentPage);
+      if(!hit){ frag.appendChild(document.createTextNode(ch)); i++; continue; }
+
+      const {page,labels,len}=hit;
+      const key=labels.join(">");
+      const targetPage=page||currentPage;
+      const id=parsed.dict[targetPage].get(key) || parsed.dict[targetPage].get(labels.at(-1)) || null;
+
+      if(id){
+        const a=document.createElement("a");
+        a.setAttribute("href", page ? ("#"+targetPage+":"+id) : ("#"+id));
+        a.textContent=labels.join(" / ");
+        frag.appendChild(a);
+      }else{
+        frag.appendChild(document.createTextNode(txt.slice(i,i+len)));
+      }
+      i+=len;
+    }
+    return frag;
+  }
+
+  const tw=doc.createTreeWalker(doc.body, NodeFilter.SHOW_TEXT, {
+    acceptNode(n){
+      if(!n.nodeValue || !n.nodeValue.trim()) return NodeFilter.FILTER_REJECT;
+      const p=n.parentElement;
+      if(!p) return NodeFilter.FILTER_REJECT;
+      return isReplaceScope(p)?NodeFilter.FILTER_ACCEPT:NodeFilter.FILTER_REJECT;
+    }
+  });
+
+  const toReplace=[];
+  while(tw.nextNode()) toReplace.push(tw.currentNode);
+  for(const n of toReplace){
+    const frag=transformTextNode(n);
+    n.parentNode.replaceChild(frag,n);
+  }
+}
+
 async function buildHTML(parsed){
   const tplText=await fetch("template.html").then(r=>{ if(!r.ok) throw new Error("template.html が読み込めませんでした。"); return r.text(); });
   const doc=new DOMParser().parseFromString(tplText,"text/html");
@@ -193,119 +293,7 @@ async function buildHTML(parsed){
   mountPage("main", parsed.pages.main);
   mountPage("etc",  parsed.pages.etc);
 
-  // --- ハッシュジャンプ処理 ---
-  (function wireJumps(){
-    const isReplaceScope = (el)=>{
-      if(!el) return false;
-      if(el.closest("h1,h2,h3,pre,code,.code")) return false;
-      return true;
-    };
-
-    function parseJump(s, i, currentPage){
-      const N = s.length;
-      const isWhite = ch => /\s/.test(ch);
-      const atBoundaryLeft = (i===0) || isWhite(s[i-1]);
-      if(!atBoundaryLeft) return null;
-      let j=i, page=null;
-      if(s[j]==="◆"){
-        const rest = s.slice(j+1);
-        if(rest.startsWith("info#")) { page="info"; j += 1 + "info".length; }
-        else if(rest.startsWith("main#")) { page="main"; j += 1 + "main".length; }
-        else if(rest.startsWith("etc#"))  { page="etc";  j += 1 + "etc".length;  }
-        else return null;
-        if(s[j] !== "#") return null;
-      }else if(s[j] === "#"){
-        page = null;
-      }else{
-        return null;
-      }
-      const labels=[];
-      let k=j;
-      function readLabel(kStart){
-        let p = kStart;
-        while(p < N){
-          if(isWhite(s[p])) break;
-          if(s[p]==="#" && (s.slice(p,p+2)==="##" || s.slice(p,p+3)==="###")) break;
-          p++;
-        }
-        return s.slice(kStart, p);
-      }
-      if(s[k] !== "#") return null;
-      let pos = k+1;
-      const l1 = readLabel(pos);
-      if(!l1) return null;
-      pos += l1.length;
-      labels.push(l1);
-      if(s.slice(pos, pos+2) === "##"){
-        pos += 2;
-        const l2 = readLabel(pos);
-        if(!l2) return null;
-        pos += l2.length;
-        labels.push(l2);
-      }
-      if(s.slice(pos, pos+3) === "###"){
-        pos += 3;
-        const l3 = readLabel(pos);
-        if(!l3) return null;
-        pos += l3.length;
-        labels.push(l3);
-      }
-      const atBoundaryRight = (pos>=N) || isWhite(s[pos]);
-      if(!atBoundaryRight) return null;
-      return { len: pos - i, page, labels };
-    }
-
-    function transformTextNode(node){
-      const txt = node.nodeValue;
-      const frag = document.createDocumentFragment();
-      const parentSection = node.parentElement.closest("section.page");
-      const currentPage = parentSection?.dataset.page || "main";
-      let i=0;
-      while(i < txt.length){
-        const ch = txt[i];
-        if(ch !== "◆" && ch !== "#"){
-          frag.appendChild(document.createTextNode(ch));
-          i++;
-          continue;
-        }
-        const hit = parseJump(txt, i, currentPage);
-        if(!hit){
-          frag.appendChild(document.createTextNode(ch));
-          i++;
-          continue;
-        }
-        const { page, labels, len } = hit;
-        const key = labels.join(">");
-        const targetPage = page || currentPage;
-        const id = parsed.dict[targetPage].get(key) || parsed.dict[targetPage].get(labels.at(-1)) || null;
-        if(id){
-          const a = document.createElement("a");
-          a.setAttribute("href", page ? ("#"+targetPage+":"+id) : ("#"+id));
-          a.textContent = labels.join(" / ");
-          frag.appendChild(a);
-        }else{
-          frag.appendChild(document.createTextNode(txt.slice(i, i+len)));
-        }
-        i += len;
-      }
-      return frag;
-    }
-
-    const tw = doc.createTreeWalker(doc.body, NodeFilter.SHOW_TEXT, {
-      acceptNode(n){
-        if(!n.nodeValue || !n.nodeValue.trim()) return NodeFilter.FILTER_REJECT;
-        const p = n.parentElement;
-        if(!p) return NodeFilter.FILTER_REJECT;
-        return isReplaceScope(p) ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT;
-      }
-    });
-    const toReplace=[];
-    while(tw.nextNode()) toReplace.push(tw.currentNode);
-    for(const n of toReplace){
-      const frag = transformTextNode(n);
-      n.parentNode.replaceChild(frag, n);
-    }
-  })();
+  wireJumps(parsed, doc);
 
   return "<!doctype html>\n"+doc.documentElement.outerHTML;
 }
