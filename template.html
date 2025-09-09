@@ -42,17 +42,10 @@ nav.tabs{position:sticky;inset-block-end:0;block-size:var(--tabs);display:grid;g
 .toc .pages button[aria-current="page"]{background:var(--accent);border-color:var(--accent2);font-weight:700}
 .toc .area{padding-inline:4px}
 
-/* TOC tree */
+/* TOC-like rows (used for both TOC and Tool) */
 .toc .row{display:grid;grid-template-columns:24px 1fr;gap:6px;border-block-end:1px dashed #eee;padding:8px 4px}
 .toc .tw{cursor:pointer;color:#666}.toc .tw.off{opacity:.25;pointer-events:none}
 .lvl2{padding-inline-start:16px}.lvl3{padding-inline-start:32px}
-
-/* Tool panels (accordion-like) */
-.tool-sec{border:1px solid var(--line);border-radius:10px;margin:8px 0;overflow:hidden}
-.tool-head{display:flex;justify-content:space-between;align-items:center;padding:10px 12px;background:#fafafa;cursor:pointer}
-.tool-head .caret{opacity:.7}
-.tool-body{display:none;padding:10px 12px}
-.tool.open .tool-body{display:block}
 
 /* search */
 .searchbar{display:flex;gap:8px;padding:8px}
@@ -95,6 +88,10 @@ pre.code .copy.done{background:#e1f6e7;border-color:#b9ebc9}
 .btn.danger{color:#b00}
 mark.hl{background:#fff3a0}
 
+/* tool: 変換語 見出しの下線 & 入力欄の角丸 */
+.tool-word{border-bottom:1px solid var(--line);padding-bottom:4px}
+.input-box{width:100%;border:1px solid var(--line);border-radius:8px;padding:.5em .7em;margin:6px 0 12px;background:#fff}
+
 @media(max-width:768px){.toc{grid-template-columns:98px 1fr}}
 </style>
 </head>
@@ -121,7 +118,7 @@ mark.hl{background:#fff3a0}
 <aside id="toc" class="drawer left" aria-label="目次/ツール">
   <div class="toc">
     <div class="pages" id="tocPages"></div>
-    <div class="area" id="tocArea"><!-- TOC tree or Tool panels --></div>
+    <div class="area" id="tocArea"><!-- TOC tree or Tool --></div>
   </div>
 </aside>
 
@@ -173,7 +170,7 @@ function heads(sec){
   const st=[]; hs.forEach(x=>{while(st.length&&st.at(-1).l>=x.l)st.pop(); if(st.length){x.parent=st.at(-1); st.at(-1).children.push(x);} st.push(x);});
   return hs;
 }
-function collectText(root, {includeCode=false}={}){
+function collectText(root,{includeCode=false}={}){
   let out=""; const tw=document.createTreeWalker(root,NodeFilter.SHOW_TEXT,{acceptNode(n){
     if(!n.nodeValue.trim()) return NodeFilter.FILTER_REJECT;
     const p=n.parentElement;
@@ -184,7 +181,7 @@ function collectText(root, {includeCode=false}={}){
   while(tw.nextNode()) out+=" "+tw.currentNode.nodeValue.trim();
   return out.replace(/\s+/g," ").trim();
 }
-function bodyText(h){ // code除外の通常本文
+function bodyText(h){ // code除外の本文
   const L=h.tagName, stop=L==="H1"?/^(H1|H2|H3)$/:L==="H2"?/^(H2|H3)$/:/^H3$/;
   let s="", n=h.nextSibling;
   while(n){
@@ -230,12 +227,12 @@ function buildIndex(){
 }
 
 /* ===== TOC or TOOL rendering ===== */
-const stateTool={open:false, secOpen:{}, words:[], values:{}, composing:false, dirty:false};
+const stateTool={secOpen:{}, words:[], values:{}, composing:false, dirty:false, valuesInit:false};
 function buildTOC_orTool(){
   const pcol=$("#tocPages"); pcol.innerHTML="";
   ["info","main","etc","tool"].forEach(n=>{
     const b=document.createElement("button"); b.textContent=n;
-    const current = (S.page===n) || (n==="tool" && S.page==="tool");
+    const current=(S.page===n) || (n==="tool" && S.page==="tool");
     if(current) b.setAttribute("aria-current","page");
     b.onclick=()=>{ if(n==="tool"){ showToolPanel(); } else { switchPage(n); setOpen(toc,true); } };
     pcol.appendChild(b);
@@ -245,8 +242,7 @@ function buildTOC_orTool(){
 function showToolPanel(){ S.page="tool"; renderTOC_orToolArea(); setOpen(toc,true); buildTOC_orTool(); }
 function renderTOC_orToolArea(){
   const area=$("#tocArea"); area.innerHTML="";
-  if(S.page==="tool"){ renderTool(area); }
-  else { renderTOC(area); }
+  if(S.page==="tool") renderTool(area); else renderTOC(area);
 }
 function renderTOC(area){
   const sec=pages.find(p=>p.dataset.page===S.page);
@@ -265,7 +261,7 @@ function renderTOC(area){
   render();
 }
 
-/* ===== Tool Panel ===== */
+/* ===== Tool Panel (TOC-like) ===== */
 function readConvertWords(){
   try{ const obj=JSON.parse($("#convert-words")?.textContent||'{"words":[]}'); return Array.isArray(obj.words)?obj.words.filter(w=>w&&typeof w==="string"):[]; }
   catch{ return []; }
@@ -275,46 +271,54 @@ function loadReplacerValues(){
 }
 function saveReplacerValues(){ try{ localStorage.setItem(REPL_KEY, JSON.stringify(stateTool.values)); }catch{} }
 function renderTool(area){
-  // H1: メモ管理（トグル）
-  const secMemo=document.createElement("div"); secMemo.className="tool-sec"; if(stateTool.secOpen.memo) secMemo.classList.add("tool","open");
-  const headMemo=document.createElement("div"); headMemo.className="tool-head"; headMemo.innerHTML='<span>メモ管理</span><span class="caret">▶</span>';
-  const bodyMemo=document.createElement("div"); bodyMemo.className="tool-body";
-  const del=document.createElement("button"); del.className="btn danger"; del.textContent="全メモ削除";
-  del.onclick=()=>{ if(!confirm("全メモを削除します。よろしいですか？")) return; clearAllNotes(); buildIndex(); buildChips(); search(); alert("削除しました"); };
-  bodyMemo.appendChild(del);
-  headMemo.onclick=()=>{ stateTool.secOpen.memo=!stateTool.secOpen.memo; renderTOC_orToolArea(); };
-  secMemo.append(headMemo,bodyMemo);
-  area.appendChild(secMemo);
-
-  // H1: 文字変換（トグル）
-  const secConv=document.createElement("div"); secConv.className="tool-sec"; if(stateTool.secOpen.convert) secConv.classList.add("tool","open");
-  const headConv=document.createElement("div"); headConv.className="tool-head"; headConv.innerHTML='<span>文字変換</span><span class="caret">▶</span>';
-  const bodyConv=document.createElement("div"); bodyConv.className="tool-body";
-  headConv.onclick=()=>{ stateTool.secOpen.convert=!stateTool.secOpen.convert; renderTOC_orToolArea(); };
-  secConv.append(headConv,bodyConv);
-  area.appendChild(secConv);
-
-  // convert words list (H2 each collapsed by default)
-  stateTool.words = stateTool.words?.length ? stateTool.words : readConvertWords();
+  // 最新の語リストを毎回読む
+  stateTool.words = readConvertWords();
   if(!stateTool.valuesInit){ stateTool.values = loadReplacerValues(); stateTool.valuesInit=true; }
-  if(stateTool.secOpen.convert){
+
+  const addRow=(label, onToggle)=>{
+    const d=document.createElement("div"); d.className="row";
+    const tw=document.createElement("div"); tw.className="tw"; tw.textContent=stateTool.secOpen[label]?"▼":"▶";
+    const j=document.createElement("div"); j.textContent=label;
+    tw.onclick=()=>{ stateTool.secOpen[label]=!stateTool.secOpen[label]; onToggle(); };
+    j.onclick=()=>{ stateTool.secOpen[label]=!stateTool.secOpen[label]; onToggle(); };
+    d.append(tw,j); area.appendChild(d);
+  };
+
+  // H1: メモ管理
+  addRow("メモ管理", ()=>renderTOC_orToolArea());
+  if(stateTool.secOpen["メモ管理"]){
+    const btn=document.createElement("button"); btn.className="btn danger"; btn.textContent="全メモ削除";
+    btn.style.margin="6px 8px 12px";
+    btn.onclick=()=>{ if(!confirm("全メモを削除します。よろしいですか？")) return; clearAllNotes(); buildIndex(); buildChips(); search(); alert("削除しました"); };
+    area.appendChild(btn);
+  }
+
+  // H1: 文字変換
+  addRow("文字変換", ()=>renderTOC_orToolArea());
+  if(stateTool.secOpen["文字変換"]){
     if(!stateTool.words.length){
-      const p=document.createElement("p"); p.textContent="◆ convert ページに `## 語` を列挙すると、ここに入力欄が並びます。";
-      bodyConv.appendChild(p);
+      const p=document.createElement("p"); p.style.margin="6px 8px 0"; p.textContent="◆ convert に語を 1行1語で列挙すると、ここに表示されます。";
+      area.appendChild(p);
     }else{
       stateTool.words.forEach(word=>{
-        const s=document.createElement("div"); s.className="tool-sec"; if(stateTool.secOpen[word]) s.classList.add("tool","open");
-        const h=document.createElement("div"); h.className="tool-head"; h.innerHTML=`<span>${word}</span><span class="caret">▶</span>`;
-        const b=document.createElement("div"); b.className="tool-body";
-        const label=document.createElement("div"); label.style.cssText="font-size:12px;color:#666;margin-bottom:6px"; label.textContent=`${word} の変換入力欄（空欄＝未適用）`;
-        const input=document.createElement("input"); input.type="text"; input.style.cssText="width:100%;padding:.5em;border:1px solid var(--line);border-radius:8px";
-        input.value = stateTool.values[word] || "";
-        input.addEventListener("compositionstart",()=>{stateTool.composing=true;});
-        input.addEventListener("compositionend",()=>{stateTool.composing=false; stateTool.dirty=true; stateTool.values[word]=input.value; });
-        input.addEventListener("input",()=>{ if(stateTool.composing) return; stateTool.values[word]=input.value; stateTool.dirty=true; });
-        b.append(label,input);
-        h.onclick=()=>{ stateTool.secOpen[word]=!stateTool.secOpen[word]; renderTOC_orToolArea(); };
-        s.append(h,b); bodyConv.appendChild(s);
+        // H2: 変換語（下線付き）
+        const row=document.createElement("div"); row.className="row";
+        const tw=document.createElement("div"); tw.className="tw"; tw.textContent=stateTool.secOpen[word]?"▼":"▶";
+        const j=document.createElement("div"); j.textContent=word; j.classList.add("lvl2","tool-word");
+        tw.onclick=()=>{ stateTool.secOpen[word]=!stateTool.secOpen[word]; renderTOC_orToolArea(); };
+        j.onclick=()=>{ stateTool.secOpen[word]=!stateTool.secOpen[word]; renderTOC_orToolArea(); };
+        row.append(tw,j); area.appendChild(row);
+
+        // 入力欄（開いたときだけ）
+        if(stateTool.secOpen[word]){
+          const wrap=document.createElement("div"); wrap.style.margin="0 8px 0 48px";
+          const input=document.createElement("input"); input.type="text"; input.className="input-box"; input.placeholder=word+" の置換語（空欄＝未適用）";
+          input.value = stateTool.values[word] || "";
+          input.addEventListener("compositionstart",()=>{stateTool.composing=true;});
+          input.addEventListener("compositionend",()=>{stateTool.composing=false; stateTool.dirty=true; stateTool.values[word]=input.value; });
+          input.addEventListener("input",()=>{ if(stateTool.composing) return; stateTool.values[word]=input.value; stateTool.dirty=true; });
+          wrap.appendChild(input); area.appendChild(wrap);
+        }
       });
     }
   }
@@ -340,7 +344,7 @@ function buildChips(){
   });
 }
 function normalizeQueryTokens(rawTokens){
-  // 置換表で両側正規化：queryが原語 or 置換語のどちらでもヒット
+  // 置換表で両側正規化：原語/置換語どちらでもヒット
   const values=stateTool.values||loadReplacerValues();
   const mapFwd=new Map(Object.entries(values).filter(([k,v])=>v));
   const mapRev=new Map([...mapFwd.entries()].map(([k,v])=>[v.toLowerCase(),k]));
@@ -367,7 +371,7 @@ function headTail(s,n){if(!s)return["",""];const a=Array.from(s);return[a.slice(
 function crumb(e){ const es=S.index.get(e.page)||[]; if(e.lvl===1) return e.page; if(e.lvl===2){const p=es.find(x=>x.id===e.parent); return e.page+" ＞ "+(p?.text||"");}
   const p=es.find(x=>x.id===e.parent), p2=es.find(x=>x.id===p?.parent); return e.page+" ＞ "+(p2?.text||"")+" ＞ "+(p?.text||"");}
 
-/* 追加: コードを含めたプレビュー用テキスト（30文字） */
+/* プレビュー（30文字）：本文＋コードも含める */
 function previewWithCode(e, limit=30){
   const h=e.el; const L=h.tagName;
   const stop=L==="H1"?/^(H1|H2|H3)$/:L==="H2"?/^(H2|H3)$/:/^H3$/;
@@ -391,11 +395,10 @@ function previewWithCode(e, limit=30){
 }
 
 function getHeadingRangeFragment(e){
-  // 対象見出しelementから、同レベル以上の次見出しまでを収集して DocumentFragment を返す
   const h=e.el; const L=h.tagName;
   const stop=L==="H1"?/^(H1|H2|H3)$/:L==="H2"?/^(H2|H3)$/:/^H3$/;
   const frag=document.createDocumentFragment();
-  let n=h.cloneNode(true); // 見出し自身も含む
+  let n=h.cloneNode(true);
   frag.appendChild(n);
   let cur=h.nextSibling;
   while(cur){
@@ -407,7 +410,6 @@ function getHeadingRangeFragment(e){
     }
     cur=cur.nextSibling;
   }
-  // インタラクティブ要素の無効化（メモ編集やコピーボタンなど）
   frag.querySelectorAll(".note").forEach(s=>{ s.replaceWith(s.cloneNode(true)); });
   frag.querySelectorAll("pre.code .copy").forEach(b=>b.remove());
   return frag;
@@ -419,7 +421,6 @@ function makeCard(e, ws){
   const ttl=document.createElement("div"); ttl.className="title"; ttl.textContent = (e.kind==="memo" ? "［メモ］"+(e.sel?e.sel.slice(0,30):"") : e.text);
   const content=document.createElement("div"); content.className="content";
 
-  // ★ プレビューは「本文＋コード」から最大30文字
   const prevText = previewWithCode(e, 30);
   const [head,tail]=headTail(prevText,30);
   const prev=document.createElement("span"); prev.className="preview"; prev.textContent=head||"";
@@ -427,7 +428,6 @@ function makeCard(e, ws){
 
   const bc=document.createElement("div"); bc.textContent=crumb(e); meta.append(bc,jb); content.append(prev,dots,cont);
 
-  // full content（開いたときに本文DOMクローンを挿入）
   const full=document.createElement("div"); full.className="full"; full.hidden=true; content.appendChild(full);
   card.onclick=()=>{
     const open=card.classList.toggle("open");
@@ -501,7 +501,7 @@ document.addEventListener("click",async e=>{
        setTimeout(()=>{b.classList.remove("done"); b.textContent="copy";},900); }catch{ alert("copy failed"); }
 });
 
-/* ===== memo (選択→追加/編集/削除) ===== */
+/* ===== memo (追加/編集/削除) ===== */
 const fab=$("#fab"); let sel=null, pop=null, bd=null;
 const blockOf=n=>(n.nodeType===1?n:n.parentElement)?.closest("h1,h2,h3,p,li,blockquote,pre,dd,td,div");
 function getRange(){
@@ -601,12 +601,21 @@ function persistNotes(){
     const page=sec.dataset.page;
     $$(".note",sec).forEach(span=>{
       const h=nearestHeading(span); if(!h) return; const hid=h.dataset.id||h.id; if(!hid) return;
-      const blocks=textBlocksUnderHeading(h); const blk=blockOf(span); const bIndex=blocks.indexOf(blk); if(bIndex<0) return;
-      const start=globalOffsetInBlock(blk,span); const length=span.textContent.length;
-      memos.push({page,hid,bIndex,start,length,body:span.dataset.note||"",sel:span.textContent});
+      const blocks=textBlocksUnderHeading(h); const blk=blocks[memos.length?blocks.length-1:blocks.indexOf(blk)]; // guard not needed
     });
   });
-  try{ localStorage.setItem(MEMO_KEY, JSON.stringify(memos)); }catch{}
+  // 正式処理（前版通り）
+  const out=[];
+  pages.forEach(sec=>{
+    const page=sec.dataset.page;
+    $$(".note",sec).forEach(span=>{
+      const h=nearestHeading(span); if(!h) return; const hid=h.dataset.id||h.id; if(!hid) return;
+      const blocks=textBlocksUnderHeading(h); const blk=blockOf(span); const bIndex=blocks.indexOf(blk); if(bIndex<0) return;
+      const start=globalOffsetInBlock(blk,span); const length=span.textContent.length;
+      out.push({page,hid,bIndex,start,length,body:span.dataset.note||"",sel:span.textContent});
+    });
+  });
+  try{ localStorage.setItem(MEMO_KEY, JSON.stringify(out)); }catch{}
 }
 function restoreNotes(){
   let memos=[]; try{ memos=JSON.parse(localStorage.getItem(MEMO_KEY)||"[]"); }catch{ return; }
@@ -626,7 +635,7 @@ function clearAllNotes(){ pages.forEach(sec=>{ $$(".note",sec).forEach(unwrap); 
 function autoBoxCodes(){ $$("pre:not(.code)>code",sc).forEach(c=>{const p=c.parentElement;p.classList.add("code");const b=document.createElement("button");b.className="copy";b.textContent="copy";p.insertBefore(b,c);}); }
 
 /* ===== Text Replacement (表示のみ) ===== */
-let snapshot=[]; // {node, text}
+let snapshot=[];
 function buildSnapshot(){
   snapshot.length=0;
   const tw=document.createTreeWalker(sc,NodeFilter.SHOW_TEXT,{acceptNode(n){
@@ -642,7 +651,6 @@ function replaceInString(s){
   const vals=stateTool.values||loadReplacerValues();
   const entries=Object.entries(vals).filter(([k,v])=>v && v.length>0);
   if(!entries.length) return s;
-  // 語境界（左＝行頭/空白、右＝空白/行末）に近い簡易実装
   for(const [k,v] of entries){
     const re=new RegExp(`(^|\\s)(${k.replace(/[.*+?^${}()|[\\]\\\\]/g,"\\$&")})(?=\\s|$)`,"g");
     s=s.replace(re,(m,pre)=>pre+v);
@@ -662,14 +670,14 @@ function applyReplacements(){
   if(!snapshot.length) buildSnapshot();
   const vals=stateTool.values||loadReplacerValues();
   const entries=Object.entries(vals).filter(([k,v])=>v && v.length>0);
-  if(!entries.length){ // 元に戻す
+  if(!entries.length){
     snapshot.forEach(s=>{ if(s.node.nodeValue!==s.text) s.node.nodeValue=s.text; });
     return;
   }
-  snapshot.forEach(s=>{ const cur=s.node.nodeValue; const next=replaceInString(s.text); if(cur!==next) s.node.nodeValue=next; });
+  snapshot.forEach(s=>{ const next=replaceInString(s.text); if(s.node.nodeValue!==next) s.node.nodeValue=next; });
 }
-function applyReplacements_ifNeeded(reason){
-  if(stateTool.composing) return; // IMEガード
+function applyReplacements_ifNeeded(){
+  if(stateTool.composing) return;
   if(!stateTool.dirty) return;
   stateTool.dirty=false;
   saveReplacerValues();
@@ -681,10 +689,10 @@ function applyReplacements_ifNeeded(reason){
 let armed=true;
 function armOnce(){ armed=true; }
 ["pointerdown","wheel","keydown"].forEach(ev=>{
-  sc.addEventListener(ev,()=>{ if(armed){ armed=false; applyReplacements_ifNeeded("main-interact"); } },{passive:true});
+  sc.addEventListener(ev,()=>{ if(armed){ armed=false; applyReplacements_ifNeeded(); } },{passive:true});
 });
-addEventListener("hashchange",()=>{ if(armed){ armed=false; applyReplacements_ifNeeded("hashchange"); }});
-tabs.forEach(b=>b.addEventListener("click",()=>{ if(armed){ armed=false; applyReplacements_ifNeeded("tab"); }}));
+addEventListener("hashchange",()=>{ if(armed){ armed=false; applyReplacements_ifNeeded(); }});
+tabs.forEach(b=>b.addEventListener("click",()=>{ if(armed){ armed=false; applyReplacements_ifNeeded(); }}));
 btnT.addEventListener("click",()=>{ setTimeout(armOnce,0); });
 
 /* ===== init ===== */
