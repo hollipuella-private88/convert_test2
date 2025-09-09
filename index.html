@@ -182,7 +182,7 @@ async function buildHTML(parsed){
   mount("info",parsed.pages.info); mount("main",parsed.pages.main); mount("etc",parsed.pages.etc);
 
 // ◆ convert → JSON を埋め込み（template 側が読む）
-// 既存があれば置換、無ければ新規作成（重複防止）
+// 既存があれば置換、無ければ新規（重複防止）
 const data = JSON.stringify({ words: parsed.convertWords }, null, 0);
 let holder = doc.querySelector('#convert-words');
 if (holder) {
