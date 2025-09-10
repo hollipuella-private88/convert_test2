@@ -1,3 +1,300 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>{{TITLE}}</title>
+<meta name="trpg-key" content="{{KEY}}">
+<style>
+:root{
+  --bg:#fff; --text:#333; --line:#e5e5e5; --accent:#e7f1ff; --accent2:#b9d6ff;
+  --header:56px; --tabs:52px; --drawerW:min(92vw,420px); --r:12px; --sh:0 6px 20px rgba(0,0,0,.08);
+  --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+}
+*{box-sizing:border-box}
+html,body{height:100%}
+body{margin:0;background:var(--bg);color:var(--text);font:16px/1.85 system-ui,-apple-system,"Segoe UI",Roboto,"Noto Sans JP","Yu Gothic UI","Meiryo",sans-serif}
+
+/* header */
+header{position:sticky;inset-block-start:0;z-index:60;height:var(--header);display:grid;grid-template-columns:auto 1fr auto;place-items:center;padding:8px;border-block-end:1px solid var(--line);background:#fff}
+.title{text-align:center;font-weight:700}
+.icon{min-inline-size:44px;min-block-size:40px;border:1px solid var(--line);border-radius:10px;background:#fff;display:inline-grid;place-items:center;cursor:pointer;padding:0 .9em}
+.icon:focus-visible{outline:2px solid #2563eb;outline-offset:2px}
+
+/* main and tabs */
+main{block-size:calc(100dvh - var(--header) - var(--tabs));overflow:auto;scroll-behavior:smooth;padding:16px min(6vw,28px) 120px}
+nav.tabs{position:sticky;inset-block-end:0;block-size:var(--tabs);display:grid;grid-template-columns:repeat(3,1fr);border-block-start:1px solid var(--line);background:#fff;z-index:50}
+.tab{appearance:none;border:0;background:#fff;cursor:pointer;padding:.6em 0}
+.tab[aria-current="page"]{background:var(--accent);font-weight:700}
+.page{display:none}
+.page[aria-hidden="false"]{display:block}
+
+/* drawers */
+.drawer{position:fixed;inset-block-start:var(--header);inset-block-end:0;inline-size:var(--drawerW);background:#fff;border:1px solid var(--line);box-shadow:var(--sh);overflow:auto;transition:.25s;z-index:900}
+.drawer.left{inset-inline-start:0;transform:translateX(-110%)}
+.drawer.right{inset-inline-end:0;transform:translateX(110%)}
+.drawer.open{transform:translateX(0)}
+
+/* TOC/Tool drawer content */
+.toc{display:grid;grid-template-columns:120px 1fr;gap:8px;padding:8px}
+.toc .pages{border-inline-end:1px solid var(--line);padding-inline-end:8px;display:flex;flex-direction:column;gap:6px}
+.toc .pages button{inline-size:100%;margin:0;border:1px solid var(--line);border-radius:8px;background:#fff;padding:6px;cursor:pointer;text-align:center}
+.toc .pages button[aria-current="page"]{background:var(--accent);border-color:var(--accent2);font-weight:700}
+.toc .area{padding-inline:4px}
+
+/* TOC-like rows (used for both TOC and Tool) */
+.toc .row{display:grid;grid-template-columns:24px 1fr;gap:6px;border-block-end:1px dashed #eee;padding:8px 4px}
+.toc .tw{cursor:pointer;color:#666}.toc .tw.off{opacity:.25;pointer-events:none}
+.lvl2{padding-inline-start:16px}.lvl3{padding-inline-start:32px}
+
+/* search */
+.searchbar{display:flex;gap:8px;padding:8px}
+.searchbar input{flex:1;border:1px solid var(--line);border-radius:999px;padding:.6em .9em}
+.chips{display:flex;gap:6px;flex-wrap:wrap;padding:0 8px 8px}
+.chip{border:1px solid var(--line);border-radius:999px;padding:.2em .6em;background:#fff;cursor:pointer}
+.chip.on{background:var(--accent);border-color:var(--accent2);font-weight:700}
+
+/* card */
+.card{border:1px solid var(--line);border-radius:10px;padding:8px;margin:8px;background:#fff}
+.card .meta{display:flex;justify-content:space-between;gap:8px;font-size:12px;color:#666}
+.card .title{font-weight:700;margin:.2em 0}
+.card .fulltext{
+  display:-webkit-box;
+  -webkit-line-clamp:1;          /* 閉時は1行表示 */
+  -webkit-box-orient:vertical;
+  overflow:hidden;
+  text-overflow:ellipsis;
+}
+.card.open .fulltext{display:block;-webkit-line-clamp:unset;overflow:visible}
+.card .fulltext .note{background:#e7f1ff;border-radius:3px;padding:.05em .15em}
+
+/* headings & code */
+h1,h2,h3{scroll-margin-top:calc(var(--header) + 10px)}
+h1{text-align:center;font-size:1.6rem;font-weight:800;border-block-end:1px solid var(--line);padding-block-end:.4em;margin:1.2em 0 .8em}
+h2{font-size:1.25rem;font-weight:700;margin:1.3em 0 .2em}
+h3{font-size:1.05rem;font-weight:700;margin:1.1em 0 .2em;padding-inline-start:8px;border-inline-start:3px solid var(--accent2)}
+
+/* code wrap */
+pre.code{position:relative;background:#f5f6f7;border:1px solid var(--line);border-radius:10px;padding:14px 12px 12px;white-space:pre-wrap;overflow-wrap:anywhere;word-break:break-word}
+pre.code code{white-space:inherit}
+pre.code .copy{position:absolute;inset:8px 8px auto auto;border:1px solid var(--line);border-radius:999px;background:#fff;padding:.2em .6em;cursor:pointer;font:12px/1 var(--mono)}
+pre.code .copy.done{background:#e1f6e7;border-color:#b9ebc9}
+
+/* memo */
+.note{background:#e7f1ff;border-radius:3px;padding:.05em .15em}
+.fab{position:fixed;z-index:950;display:none;min-inline-size:40px;min-block-size:40px;border:1px solid var(--line);border-radius:999px;background:#fff;box-shadow:var(--sh);place-items:center;cursor:pointer}
+.fab.show{display:grid}
+.backdrop{position:fixed;inset:0;background:rgba(0,0,0,.15);z-index:995}
+.pop{position:fixed;z-index:1000;background:#fff;border:1px solid var(--line);border-radius:10px;box-shadow:var(--sh);padding:10px;min-inline-size:min(92vw,320px);max-inline-size:min(96vw,420px);max-block-size:80dvh;overflow:auto}
+.pop h4{margin:.2em 0 .6em}
+.pop textarea{inline-size:100%;min-block-size:110px;border:1px solid var(--line);border-radius:8px;padding:8px;font:13px/1.6 var(--mono)}
+.actions{display:flex;gap:10px;justify-content:space-between;margin-top:8px;flex-wrap:wrap}
+.btn{border:1px solid var(--line);border-radius:8px;background:#fff;padding:.5em .9em;white-space:nowrap;min-inline-size:86px}
+.btn.primary{background:#0d6efd;border-color:#0d6efd;color:#fff}
+.btn.danger{color:#b00}
+mark.hl{background:#fff3a0}
+
+/* tool: 変換語 見出しの下線 & 入力欄の角丸 */
+.tool-word{border-bottom:1px solid var(--line);padding-bottom:4px}
+.input-box{width:100%;border:1px solid var(--line);border-radius:8px;padding:.5em .7em;margin:6px 0 12px;background:#fff}
+
+/* --- card preview spacing fix --- */
+.card .fulltext > :first-child{ margin-block-start:0 !important; }
+.card .fulltext > :last-child { margin-block-end:0 !important; }
+.card .fulltext > p,
+.card .fulltext > ul,
+.card .fulltext > ol,
+.card .fulltext > pre,
+.card .fulltext > blockquote { margin-block:.35em .4em; }
+
+@media(max-width:768px){.toc{grid-template-columns:98px 1fr}}
+</style>
+</head>
+<body>
+<header>
+  <button id="btnToc" class="icon" aria-label="目次">≡</button>
+  <div class="title">{{TITLE}}</div>
+  <button id="btnSearch" class="icon" aria-label="検索">◀</button>
+</header>
+
+<main id="sc">
+  <section class="page" data-page="info" aria-hidden="false"><!-- CONTENT:info --></section>
+  <section class="page" data-page="main" aria-hidden="true"><!-- CONTENT:main --></section>
+  <section class="page" data-page="etc"  aria-hidden="true"><!-- CONTENT:etc --></section>
+</main>
+
+<nav class="tabs" role="tablist" aria-label="ページ切替">
+  <button class="tab" data-target="info" aria-current="page">info</button>
+  <button class="tab" data-target="main">main</button>
+  <button class="tab" data-target="etc">etc</button>
+</nav>
+
+<!-- left drawer: TOC + tool -->
+<aside id="toc" class="drawer left" aria-label="目次/ツール">
+  <div class="toc">
+    <div class="pages" id="tocPages"></div>
+    <div class="area" id="tocArea"><!-- TOC tree or Tool --></div>
+  </div>
+</aside>
+
+<!-- right drawer: search -->
+<aside id="sea" class="drawer right" aria-label="検索">
+  <div class="searchbar"><input id="q" placeholder="空白区切り AND（全ページ）"></div>
+  <div id="chips" class="chips"></div>
+  <div id="res" aria-live="polite"></div>
+</aside>
+
+<button id="fab" class="fab" title="メモを追加">＋</button>
+
+<!-- 変換器が埋める想定の JSON -->
+<script id="convert-words" type="application/json">{"words":[]}</script>
+
+<script>
+(()=>{"use strict";
+/* ===== util & state ===== */
+const $=(s,r=document)=>r.querySelector(s), $$=(s,r=document)=>Array.from(r.querySelectorAll(s));
+const sc=$("#sc"), pages=$$(".page"), tabs=$$(".tab"), toc=$("#toc"), sea=$("#sea"), btnT=$("#btnToc"), btnS=$("#btnSearch");
+const MOBILE=()=>matchMedia("(max-width:768px)").matches;
+const vp=()=>{const x=visualViewport;return x?{x:x.offsetLeft,y:x.offsetTop,w:x.width,h:x.height}:{x:0,y:0,w:innerWidth,h:innerHeight};};
+const pageOrder=new Map([["info",0],["main",1],["etc",2]]);
+const cmp=(a,b)=> (pageOrder.get(a.page)-pageOrder.get(b.page)) || ((a.order??9e8)-(b.order??9e8));
+const parseHash=h=>{const raw=decodeURIComponent(h.replace(/^#/,""));if(!raw)return{id:"",page:null};const m=raw.match(/^([A-Za-z0-9_-]+):(.*)$/);return m?{page:m[1],id:m[2]}:{page:null,id:raw}};
+const FIXED_KEY=(document.querySelector('meta[name="trpg-key"]')?.content||"").trim();
+if(!/^[A-Za-z0-9_-]+$/.test(FIXED_KEY)) alert("テンプレートの固定キー(meta[name=trpg-key])が不正です。");
+const MEMO_KEY="trpg:"+FIXED_KEY+":memos";
+const REPL_KEY="trpg:"+FIXED_KEY+":replacer";
+let S={page:"info",index:new Map(),tags:new Set()}, ALL=[], ENT=new Map(), ID=new Map(), TAG_SIG="";
+
+/* drawers & buttons */
+const updIcon=()=>{ btnS.textContent=sea.classList.contains("open")?"▶":"◀"; };
+
+// ドロワー閉じ時、文字変換の入力値を強制回収して適用
+function flushToolInputs(){
+  const inputs = document.querySelectorAll('#tocArea .input-box');
+  let changed = false;
+  inputs.forEach(inp=>{
+    const word = inp.getAttribute('placeholder')||"";
+    if (!word) return;
+    const v = inp.value;
+    if ((stateTool.values[word]||"") !== v){
+      stateTool.values[word] = v;
+      changed = true;
+    }
+  });
+  if (changed) stateTool.dirty = true;
+}
+
+const setOpen=(el,on)=>{
+  el.classList.toggle("open",!!on);
+  if(el===sea) updIcon();
+  if(on && el===toc) sea.classList.remove("open");
+  if(!on && el===toc){            // ドロワーを閉じたタイミングで確実に適用（保険）
+    flushToolInputs();
+    applyReplacements_ifNeeded();
+  }
+};
+btnT.onclick=()=>setOpen(toc,!toc.classList.contains("open"));
+btnS.onclick=()=>setOpen(sea,!sea.classList.contains("open")); updIcon();
+tabs.forEach(b=>b.onclick=()=>switchPage(b.dataset.target));
+function switchPage(p){
+  if(S.page===p) return;
+  pages.forEach(sec=>sec.setAttribute("aria-hidden", sec.dataset.page===p?"false":"true"));
+  tabs.forEach(b=>b.setAttribute("aria-current", b.dataset.target===p?"page":"false"));
+  S.page=p; buildTOC_orTool(); buildChips(); if(sea.classList.contains("open")) search();
+}
+
+/* ===== headings, body text and index ===== */
+function heads(sec){
+  const hs=$$("h1,h2,h3",sec).map(h=>({el:h,l:+h.tagName[1],id:h.dataset.id||h.id,text:h.textContent.trim(),
+                                        tags:(h.dataset.tags||"").split(/\s+/).filter(Boolean),children:[],parent:null,page:sec.dataset.page}));
+  const st=[]; hs.forEach(x=>{while(st.length&&st.at(-1).l>=x.l)st.pop(); if(st.length){x.parent=st.at(-1); st.at(-1).children.push(x);} st.push(x);});
+  return hs;
+}
+function collectText(root,{includeCode=false}={}){
+  let out=""; const tw=document.createTreeWalker(root,NodeFilter.SHOW_TEXT,{acceptNode(n){
+    if(!n.nodeValue.trim()) return NodeFilter.FILTER_REJECT;
+    const p=n.parentElement;
+    if(p&&p.closest(".note")) return NodeFilter.FILTER_REJECT;
+    if(!includeCode && p && p.closest("pre,code,.code")) return NodeFilter.FILTER_REJECT;
+    return NodeFilter.FILTER_ACCEPT;
+  }});
+  while(tw.nextNode()) out+=" "+tw.currentNode.nodeValue.trim();
+  return out.replace(/\s+/g," ").trim();
+}
+function bodyText(h){ // code除外の本文
+  const L=h.tagName, stop=L==="H1"?/^(H1|H2|H3)$/:L==="H2"?/^(H2|H3)$/:/^H3$/;
+  let s="", n=h.nextSibling;
+  while(n){
+    if(n.nodeType===1){ if(stop.test(n.tagName)) break; s+=" "+collectText(n); }
+    else if(n.nodeType===3){ s+=" "+n.nodeValue.trim(); }
+    n=n.nextSibling;
+  }
+  return s.replace(/\s+/g," ").trim();
+}
+function nearestHeading(el){
+  let n=el.nodeType===1?el:el.parentElement; while(n){ if(n.matches?.("h1,h2,h3")) return n; n=n.parentElement; }
+  n=el; while(n){ let p=n; while(p){ if(p.previousElementSibling){ p=p.previousElementSibling; if(p.matches?.("h1,h2,h3")) return p; } else { p=p.parentElement; if(!p) break; if(p.matches?.("h1,h2,h3")) return p; } } n=n.parentElement; }
+  return null;
+}
+function buildIndex(){
+  S.index.clear(); S.tags.clear(); ID.clear();
+  pages.forEach(sec=>{
+    const pg=sec.dataset.page, its=heads(sec), es=[], byId=new Map();
+    its.forEach(it=>{
+      const e={
+        page:pg,id:it.id,lvl:it.l,text:it.text,
+        body:bodyText(it.el),
+        scope:(it.text+" "+bodyText(it.el)).trim(),
+        scopeLower:(it.text+" "+bodyText(it.el)).trim().toLowerCase(),
+        tags:[...new Set(it.tags)],parent:it.parent?.id||null,
+        children:it.children.map(c=>c.id),el:it.el,order:undefined
+      };
+      it.tags.forEach(t=>S.tags.add(t)); es.push(e); byId.set(e.id,e); if(!ID.has(e.id)) ID.set(e.id,{text:e.text,page:pg,el:it.el});
+    });
+    es.forEach(e=>{let p=e.parent; while(p){const pe=byId.get(p); (pe.descendants??=new Set()).add(e.id); p=pe.parent;}});
+    const elements=sec.querySelectorAll("h1,h2,h3,span.note"); let order=0;
+    elements.forEach(el=>{
+      if(el.matches("h1,h2,h3")){
+        const id=el.dataset.id||el.id;
+        const ent=byId.get(id);
+        if(ent && ent.order===undefined) ent.order=order++;
+      } else { // note
+        const up=nearestHeading(el)||sec.querySelector("h1,h2,h3"); 
+        if(!up) return;
+        const parent=es.find(x=>x.el===up); 
+        if(!parent) return;
+        S.tags.add("メモ");
+
+        const memoScope = (el.textContent + " " + (el.dataset.note || "")).trim();
+        const memoId=parent.id+"::m::"+Math.random().toString(36).slice(2,8);
+
+        (parent.descendants??=new Set()).add(memoId);
+        es.push({
+          kind:"memo",
+          page:pg,
+          id:memoId,
+          lvl:3,
+          scope: memoScope.slice(0,400),
+          scopeLower: memoScope.toLowerCase().slice(0,400), // ★検索対象に追加
+          text: el.textContent || "（メモ）",
+          body: (el.dataset.note||""),
+          sel: el.textContent,
+          tags:["メモ"],
+          parent: parent.id,
+          children:[],
+          el,
+          descendants:new Set(),
+          order:order++
+        });
+      }
+    });
+    es.forEach(e=>{if(e.order===undefined) e.order=order++;});
+    S.index.set(pg,es);
+  });
+  ALL=[...(S.index.get("info")||[]),...(S.index.get("main")||[]),...(S.index.get("etc")||[])];
+  ENT=new Map(ALL.map(e=>[e.id,e]));
+}
+
 /* ===== highlight & links ===== */
 function clearHL(){ $$(".hl-tmp",sc).forEach(m=>m.replaceWith(document.createTextNode(m.textContent))); }
 function highlight(el,ws,includeCode=false){
