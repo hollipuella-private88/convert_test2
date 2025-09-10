@@ -60,7 +60,7 @@ nav.tabs{position:sticky;inset-block-end:0;block-size:var(--tabs);display:grid;g
 .card .title{font-weight:700;margin:.2em 0}
 .card .fulltext{
   display:-webkit-box;
-  -webkit-line-clamp:1;          /* 閉時は1行表示（全文はopenで表示） */
+  -webkit-line-clamp:1;          /* 閉時は1行表示 */
   -webkit-box-orient:vertical;
   overflow:hidden;
   text-overflow:ellipsis;
@@ -188,7 +188,7 @@ const setOpen=(el,on)=>{
   el.classList.toggle("open",!!on);
   if(el===sea) updIcon();
   if(on && el===toc) sea.classList.remove("open");
-  if(!on && el===toc){            // ドロワーを閉じたタイミングで確実に適用
+  if(!on && el===toc){            // ドロワーを閉じたタイミングで確実に適用（保険）
     flushToolInputs();
     applyReplacements_ifNeeded();
   }
@@ -340,7 +340,6 @@ function readConvertWords(){
   }catch{ return []; }
 }
 function loadReplacerValues(){ try{ const v=JSON.parse(localStorage.getItem(REPL_KEY)||"{}"); return v&&typeof v==="object"?v:{}; }catch{ return {}; } }
-function saveReplacerValues(){ try{ localStorage.setItem(REPL_KEY, JSON.stringify(stateTool.values)); }catch{} }
 function renderTool(area){
   stateTool.words = readConvertWords();
   if(!stateTool.valuesInit){ stateTool.values = loadReplacerValues(); stateTool.valuesInit=true; }
@@ -382,40 +381,24 @@ function renderTool(area){
         if(stateTool.secOpen[word]){
           const wrap=document.createElement("div"); wrap.style.margin="0 8px 0 48px";
           const input=document.createElement("input"); input.type="text"; input.className="input-box";
-          input.placeholder = word;                   /* ← 短いプレースホルダー：変換語だけ */
+          input.placeholder = word;                   /* プレースホルダー＝変換語だけ */
           input.value = stateTool.values[word] || "";
 
-          // 変換欄のイベント（即時適用）
-input.addEventListener("compositionstart",()=>{
-  stateTool.composing=true;
-});
-
-input.addEventListener("compositionend",()=>{
-  stateTool.composing=false;
-  stateTool.values[word]=input.value;
-  stateTool.dirty=true;
-  applyReplacements_ifNeeded();     // ★IME確定で即反映
-});
-
-input.addEventListener("input",()=>{
-  if(stateTool.composing) return;
-  stateTool.values[word]=input.value;
-  stateTool.dirty=true;
-  applyReplacements_ifNeeded();     // ★通常入力で即反映
-});
-
-input.addEventListener("blur", ()=>{
-  stateTool.values[word]=input.value;
-  stateTool.dirty=true;
-  applyReplacements_ifNeeded();     // ★フォーカス抜けも保険
-});
-
-input.addEventListener("change",()=>{
-  stateTool.values[word]=input.value;
-  stateTool.dirty=true;
-  applyReplacements_ifNeeded();     // ★保険
-});
-
+          // 即時適用（IME配慮）
+          input.addEventListener("compositionstart",()=>{stateTool.composing=true;});
+          input.addEventListener("compositionend",()=>{
+            stateTool.composing=false; stateTool.values[word]=input.value; stateTool.dirty=true; applyReplacements_ifNeeded();
+          });
+          input.addEventListener("input",()=>{
+            if(stateTool.composing) return;
+            stateTool.values[word]=input.value; stateTool.dirty=true; applyReplacements_ifNeeded();
+          });
+          input.addEventListener("blur", ()=>{
+            stateTool.values[word]=input.value; stateTool.dirty=true; applyReplacements_ifNeeded();
+          });
+          input.addEventListener("change",()=>{
+            stateTool.values[word]=input.value; stateTool.dirty=true; applyReplacements_ifNeeded();
+          });
 
           wrap.appendChild(input); area.appendChild(wrap);
         }
@@ -431,16 +414,14 @@ q.addEventListener("compositionend",()=>{composing=false; search();});
 q.addEventListener("input",()=>{ if(!composing) debounce(search,250)(); });
 q.addEventListener("focus", clearHL);
 const words=s=>(s||"").replace(/[　]/g," ").trim().split(/\s+/).filter(Boolean).map(w=>w.toLowerCase());
-const debounce=(f,w=250)=>{let t;return(...a)=>{clearTimeout(t);t=setTimeout(()=>f(...a),w)}};
+const debounce=(f,w=250)=>{ let t; return (...a)=>{ clearTimeout(t); t=setTimeout(()=>f(...a), w); }; };
 
-function tokensForFilter(rawTokens){ return rawTokens.map(t=>t.toLowerCase()); } // ★原文でフィルタ
+function tokensForFilter(rawTokens){ return rawTokens.map(t=>t.toLowerCase()); } // ★変換前でフィルタ
 function tokensForHighlight(rawTokens){
-  // 小文字化した変換表を用意（原文→変換後、変換後→原文の両方向）
   const values = stateTool.values || loadReplacerValues();
   const entries = Object.entries(values).filter(([k,v]) => typeof v === "string" && v.length);
-  const mapFwd = new Map(entries.map(([k,v]) => [k.toLowerCase(), v.toLowerCase()])); // 原文→変換後
-  const mapRev = new Map(entries.map(([k,v]) => [v.toLowerCase(), k.toLowerCase()])); // 変換後→原文
-
+  const mapFwd = new Map(entries.map(([k,v]) => [k.toLowerCase(), v.toLowerCase()])); // 原→変
+  const mapRev = new Map(entries.map(([k,v]) => [v.toLowerCase(), k.toLowerCase()])); // 変→原
   const out = new Set();
   for(const t of rawTokens){
     const x = t.toLowerCase();
@@ -452,36 +433,66 @@ function tokensForHighlight(rawTokens){
 }
 
 function buildChips(){
-  const tags=new Set(S.tags); tags.add("メモ");
-  const sig=JSON.stringify([...tags].sort()); if(sig===TAG_SIG && $("#chips").children.length) return;
-  TAG_SIG=sig; const wrap=$("#chips"); wrap.innerHTML="";
-  ["all",...JSON.parse(sig)].forEach(n=>{
+  if(!S || !S.index || S.index.size===0){ buildIndex(); }
+  const tags=new Set(S.tags||[]); tags.add("メモ");
+  const list=[...tags].filter(Boolean).sort();
+  const sig=JSON.stringify(list);
+  const wrap=$("#chips"); if(!wrap) return;
+  if(sig===TAG_SIG && wrap.children.length) return;
+  TAG_SIG=sig; wrap.innerHTML="";
+  const allBtn=document.createElement("button");
+  allBtn.className="chip on"; allBtn.textContent="all"; allBtn.dataset.v="all"; allBtn.type="button";
+  wrap.appendChild(allBtn);
+  for(const n of list){
     const b=document.createElement("button");
-    b.className="chip"+(n==="all"?" on":""); b.textContent=n; b.dataset.v=n; b.type="button";
-    b.onclick=()=>{$$("#chips .chip").forEach(c=>c.classList.toggle("on",c===b)); search();};
+    b.className="chip"; b.textContent=n; b.dataset.v=n; b.type="button";
     wrap.appendChild(b);
-  });
+  }
+  if(!wrap._bound){
+    wrap.addEventListener("click",(ev)=>{
+      const b=ev.target.closest(".chip"); if(!b) return;
+      $$("#chips .chip").forEach(c=>c.classList.toggle("on",c===b));
+      search();
+    });
+    wrap._bound=true;
+  }
 }
 
 function search(){
-  const raw = words(q.value);
-  const filterT = tokensForFilter(raw);      // ★変換前原文のみでフィルタ
-  const hlT     = tokensForHighlight(raw);   // ★原文＋変換後でハイライト
+  if(!ALL || !ALL.length){ buildIndex(); }
+  const raw = words(q?.value||"");
+  const filterT = tokensForFilter(raw);
+  const hlT     = tokensForHighlight(raw);
 
-  const tag=($(".chip.on")?.dataset.v)||"all", cont=$("#res"); cont.innerHTML="";
+  const tag=($("#chips .chip.on")?.dataset?.v)||"all";
+  const cont=$("#res"); if(!cont) return; cont.innerHTML="";
+
   if(tag==="all" && filterT.length===0){
-    return renderVirtual([...(S.index.get("info")||[]),...(S.index.get("main")||[]),...(S.index.get("etc")||[])]
-      .filter(e=>e.kind!=="memo"),[],true);
+    const flat=[...(S.index.get("info")||[]),...(S.index.get("main")||[]),...(S.index.get("etc")||[])];
+    return renderVirtual(flat.filter(e=>e.kind!=="memo"),[],true);
   }
-  const hits=ALL.filter(e=>filterT.every(w=>(e.scopeLower||"").includes(w)) && (tag==="all" || e.tags?.includes(tag)));
+
+  const hits=ALL.filter(e=>{
+    const scope=(e.scopeLower||"");
+    const okWords=filterT.every(w=>scope.includes(w));
+    const okTag=(tag==="all")||(e.tags?.includes(tag));
+    return okWords && okTag;
+  });
+
   const idset=new Set(hits.map(h=>h.id));
-  const filtered=hits.filter(e=>{ const d=e.descendants||new Set(); for(const c of d){ const ce=ENT.get(c); if(ce && ce.kind!=="memo" && idset.has(c)) return false; } return true; });
+  const filtered=hits.filter(e=>{
+    const d=e.descendants||new Set();
+    for(const c of d){ const ce=ENT.get(c); if(ce && ce.kind!=="memo" && idset.has(c)) return false; }
+    return true;
+  });
   renderVirtual(filtered,hlT,false);
 }
 
 const BATCH=100;
-function crumb(e){ const es=S.index.get(e.page)||[]; if(e.lvl===1) return e.page; if(e.lvl===2){const p=es.find(x=>x.id===e.parent); return e.page+" ＞ "+(p?.text||"");}
-  const p=es.find(x=>x.id===e.parent), p2=es.find(x=>x.id===p?.parent); return e.page+" ＞ "+(p2?.text||"")+" ＞ "+(p?.text||"");}
+function crumb(e){ const es=S.index.get(e.page)||[]; if(e.lvl===1) return e.page;
+  if(e.lvl===2){const p=es.find(x=>x.id===e.parent); return e.page+" ＞ "+(p?.text||"");}
+  const p=es.find(x=>x.id===e.parent), p2=es.find(x=>x.id===p?.parent);
+  return e.page+" ＞ "+(p2?.text||"")+" ＞ "+(p?.text||"");}
 
 /* 見出しは含めず、本文クローンを返す（コピー/メモ等の相互作用は除去） */
 function getHeadingRangeFragment(e){
@@ -522,7 +533,7 @@ function firstMarkUnderHeading(h){
   return null;
 }
 
-/* カード：全文を一つのDOMで保持。閉じている時はCSSで省略表示、開くとそのまま全文に */
+/* カード：全文を一つのDOMで保持（閉＝省略、開＝そのまま全文） */
 function makeCard(e, ws){
   const card=document.createElement("div"); card.className="card";
   const meta=document.createElement("div"); meta.className="meta";
@@ -532,13 +543,9 @@ function makeCard(e, ws){
   ttl.textContent = (e.kind==="memo" ? "［メモ］"+(e.sel?e.sel.slice(0,30):"") : e.text);
 
   const content=document.createElement("div"); content.className="content";
-
-  // 全文（見出しは入れない）→ 置換を適用してから挿入
-  const frag=getHeadingRangeFragment(e);
-  replaceInNodeTree(frag);
-  const full=document.createElement("div");
-  full.className="fulltext";
-  full.appendChild(frag);
+  const frag=getHeadingRangeFragment(e);      // 見出しを除いた本文
+  replaceInNodeTree(frag);                    // 表示置換を適用
+  const full=document.createElement("div"); full.className="fulltext"; full.appendChild(frag);
   content.appendChild(full);
 
   card.onclick=()=>{ card.classList.toggle("open"); };
@@ -558,32 +565,24 @@ function renderVirtual(list,ws,preserve){
 }
 
 /* ===== highlight & links ===== */
-function highlight(el, ws, includeCode=false){
-  const root = (el.closest("section")||sc);
-  const tw=document.createTreeWalker(root,NodeFilter.SHOW_TEXT,{
-    acceptNode(n){
-      if(!n.nodeValue.trim()) return NodeFilter.FILTER_REJECT;
-      const p=n.parentElement;
-      if(!includeCode && p && p.closest("pre,code,.code")) return NodeFilter.FILTER_REJECT; // ←オプション
-      if(p && p.classList.contains("note")) return NodeFilter.FILTER_REJECT;
-      return NodeFilter.FILTER_ACCEPT;
-    }
-  });
-  const re=new RegExp("("+ws.map(w=>w.replace(/[.*+?^${}()|[\]\\]/g,"\\$&")).join("|")+")","ig");
-  const targets=[];
-  while(tw.nextNode()){ const n=tw.currentNode; if(re.test(n.nodeValue)) targets.push(n); }
+function clearHL(){ $$(".hl-tmp",sc).forEach(m=>m.replaceWith(document.createTextNode(m.textContent))); }
+function highlight(el,ws,includeCode=false){
+  const root=(el.closest("section")||sc);
+  const tw=document.createTreeWalker(root,NodeFilter.SHOW_TEXT,{acceptNode(n){
+    if(!n.nodeValue.trim())return NodeFilter.FILTER_REJECT;
+    const p=n.parentElement;
+    if(!includeCode && p && p.closest("pre,code,.code")) return NodeFilter.FILTER_REJECT;
+    if(p && p.classList.contains("note")) return NodeFilter.FILTER_REJECT;
+    return NodeFilter.FILTER_ACCEPT;
+  }});
+  const re=new RegExp("("+ws.map(w=>w.replace(/[.*+?^${}()|[\\]\\\\]/g,"\\$&")).join("|")+")","ig"), targets=[];
+  while(tw.nextNode()){const n=tw.currentNode; if(re.test(n.nodeValue)) targets.push(n);}
   targets.forEach(n=>{
     const parts=n.nodeValue.split(re), f=document.createDocumentFragment();
-    parts.forEach(t=>{
-      if(!t) return;
-      if(ws.some(w=>t.toLowerCase()===w.toLowerCase())){
-        const m=document.createElement("mark"); m.className="hl-tmp"; m.textContent=t; f.appendChild(m);
-      }else{ f.appendChild(document.createTextNode(t)); }
-    });
+    parts.forEach(t=>{ if(!t) return; if(ws.some(w=>t.toLowerCase()===w.toLowerCase())){ const m=document.createElement("mark"); m.className="hl-tmp"; m.textContent=t; f.appendChild(m);} else f.appendChild(document.createTextNode(t));});
     n.parentNode.replaceChild(f,n);
   });
 }
-
 addEventListener("hashchange",()=>{
   const {id,page}=parseHash(location.hash); if(!id) return; const ent=ID.get(id); if(!ent) return;
   const targetPage=page||ent.page, act=()=>{ const sec=pages.find(p=>p.dataset.page===targetPage);
@@ -600,15 +599,11 @@ function linkNames(){
 function jump(e,ws){
   const go=()=>{
     e.el.scrollIntoView({block:"start",behavior:"smooth"});
-
-    // ★追加：未反映の変換をここで反映してからハイライト
-    applyReplacements_ifNeeded();
-
+    applyReplacements_ifNeeded();                 // 置換を同期してから
     clearHL();
     if(ws.length && e.kind!=="memo"){
-      highlight(e.el, ws, true);  // ← コードも含めてマーク
-                                         // セクション内に .hl-tmp を生成
-      const target = firstMarkUnderHeading(e.el) || $(".hl-tmp");  // ★カード範囲の最初の一致へ
+      highlight(e.el, ws, true);                 // コードも含めてマーク
+      const target = firstMarkUnderHeading(e.el) || $(".hl-tmp");
       (target || e.el).scrollIntoView({block:"center",behavior:"smooth"});
     }
     if(MOBILE()) sea.classList.remove("open");
@@ -776,7 +771,6 @@ function buildSnapshot(){
     snapshot.push({ node: tw.currentNode, text: tw.currentNode.nodeValue });
   }
 }
-// 全文一致置換（コード/メモ/ジャンプリンク/見出しは別で除外）
 function replaceInString(s){
   if(!s) return s;
   const vals=stateTool.values||loadReplacerValues();
