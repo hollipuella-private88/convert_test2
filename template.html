@@ -60,17 +60,13 @@ nav.tabs{position:sticky;inset-block-end:0;block-size:var(--tabs);display:grid;g
 .card .title{font-weight:700;margin:.2em 0}
 .card .fulltext{
   display:-webkit-box;
-  -webkit-line-clamp:1;          /* 閉：1行省略（2行にしたい場合は 2 に） */
+  -webkit-line-clamp:1;          /* 閉時は1行表示（全文はopenで表示） */
   -webkit-box-orient:vertical;
   overflow:hidden;
   text-overflow:ellipsis;
 }
-.card.open .fulltext{
-  display:block;
-  -webkit-line-clamp:unset;
-  overflow:visible;
-}
-.card .fulltext .note{background:#e7f1ff;border-radius:3px;padding:.05em .15em} /* 見た目は同じだがクリック不可 */
+.card.open .fulltext{display:block;-webkit-line-clamp:unset;overflow:visible}
+.card .fulltext .note{background:#e7f1ff;border-radius:3px;padding:.05em .15em}
 
 /* headings & code */
 h1,h2,h3{scroll-margin-top:calc(var(--header) + 10px)}
@@ -150,7 +146,7 @@ mark.hl{background:#fff3a0}
 
 <button id="fab" class="fab" title="メモを追加">＋</button>
 
-<!-- 変換器が埋める想定の JSON（無ければ空配列として扱う） -->
+<!-- 変換器が埋める想定の JSON -->
 <script id="convert-words" type="application/json">{"words":[]}</script>
 
 <script>
@@ -258,15 +254,17 @@ function buildIndex(){
     es.forEach(e=>{let p=e.parent; while(p){const pe=byId.get(p); (pe.descendants??=new Set()).add(e.id); p=pe.parent;}});
     const elements=sec.querySelectorAll("h1,h2,h3,span.note"); let order=0;
     elements.forEach(el=>{
-      if(el.matches("h1,h2,h3")){ const id=el.dataset.id||el.id; const ent=byId.get(id); if(ent && ent.order===undefined) ent.order=order++; }
-             else { // note
+      if(el.matches("h1,h2,h3")){
+        const id=el.dataset.id||el.id;
+        const ent=byId.get(id);
+        if(ent && ent.order===undefined) ent.order=order++;
+      } else { // note
         const up=nearestHeading(el)||sec.querySelector("h1,h2,h3"); 
         if(!up) return;
         const parent=es.find(x=>x.el===up); 
         if(!parent) return;
         S.tags.add("メモ");
 
-        // ★ 修正点：scope と scopeLower を両方作る
         const memoScope = (el.textContent + " " + (el.dataset.note || "")).trim();
         const memoId=parent.id+"::m::"+Math.random().toString(36).slice(2,8);
 
@@ -276,8 +274,8 @@ function buildIndex(){
           page:pg,
           id:memoId,
           lvl:3,
-          scope: memoScope.slice(0,400),                 // 表示用
-          scopeLower: memoScope.toLowerCase().slice(0,400), // ★検索用
+          scope: memoScope.slice(0,400),
+          scopeLower: memoScope.toLowerCase().slice(0,400), // ★検索対象に追加
           text: el.textContent || "（メモ）",
           body: (el.dataset.note||""),
           sel: el.textContent,
@@ -384,7 +382,7 @@ function renderTool(area){
         if(stateTool.secOpen[word]){
           const wrap=document.createElement("div"); wrap.style.margin="0 8px 0 48px";
           const input=document.createElement("input"); input.type="text"; input.className="input-box";
-          input.placeholder = word;                   /* ← ★短いプレースホルダー：変換語だけ */
+          input.placeholder = word;                   /* ← 短いプレースホルダー：変換語だけ */
           input.value = stateTool.values[word] || "";
 
           // 入力イベント（IME対応＋閉じた時の取りこぼし防止）
@@ -412,15 +410,20 @@ const debounce=(f,w=250)=>{let t;return(...a)=>{clearTimeout(t);t=setTimeout(()=
 
 function tokensForFilter(rawTokens){ return rawTokens.map(t=>t.toLowerCase()); } // ★原文でフィルタ
 function tokensForHighlight(rawTokens){
-  const values=stateTool.values||loadReplacerValues();
-  const mapFwd=new Map(Object.entries(values).filter(([k,v])=>v));          // 原文→変換後
-  const mapRev=new Map([...mapFwd.entries()].map(([k,v])=>[v.toLowerCase(),k])); // 変換後→原文
-  return [...new Set(rawTokens.flatMap(t=>{
-    const x=t.toLowerCase(); const both=[x];
-    if(mapFwd.has(x)) both.push(mapFwd.get(x).toLowerCase());
-    if(mapRev.has(x)) both.push(mapRev.get(x).toLowerCase());
-    return both;
-  }))];
+  // 小文字化した変換表を用意（原文→変換後、変換後→原文の両方向）
+  const values = stateTool.values || loadReplacerValues();
+  const entries = Object.entries(values).filter(([k,v]) => typeof v === "string" && v.length);
+  const mapFwd = new Map(entries.map(([k,v]) => [k.toLowerCase(), v.toLowerCase()])); // 原文→変換後
+  const mapRev = new Map(entries.map(([k,v]) => [v.toLowerCase(), k.toLowerCase()])); // 変換後→原文
+
+  const out = new Set();
+  for(const t of rawTokens){
+    const x = t.toLowerCase();
+    out.add(x);
+    const to = mapFwd.get(x);   if(to) out.add(to);
+    const back = mapRev.get(x); if(back) out.add(back);
+  }
+  return [...out];
 }
 
 function buildChips(){
@@ -562,6 +565,10 @@ function linkNames(){
 function jump(e,ws){
   const go=()=>{
     e.el.scrollIntoView({block:"start",behavior:"smooth"});
+
+    // ★追加：未反映の変換をここで反映してからハイライト
+    applyReplacements_ifNeeded();
+
     clearHL();
     if(ws.length && e.kind!=="memo"){
       highlight(e.el, ws);                                         // セクション内に .hl-tmp を生成
