@@ -259,13 +259,35 @@ function buildIndex(){
     const elements=sec.querySelectorAll("h1,h2,h3,span.note"); let order=0;
     elements.forEach(el=>{
       if(el.matches("h1,h2,h3")){ const id=el.dataset.id||el.id; const ent=byId.get(id); if(ent && ent.order===undefined) ent.order=order++; }
-      else{ // note
-        const up=nearestHeading(el)||sec.querySelector("h1,h2,h3"); if(!up) return;
-        const parent=es.find(x=>x.el===up); if(!parent) return; S.tags.add("メモ");
+             else { // note
+        const up=nearestHeading(el)||sec.querySelector("h1,h2,h3"); 
+        if(!up) return;
+        const parent=es.find(x=>x.el===up); 
+        if(!parent) return;
+        S.tags.add("メモ");
+
+        // ★ 修正点：scope と scopeLower を両方作る
+        const memoScope = (el.textContent + " " + (el.dataset.note || "")).trim();
         const memoId=parent.id+"::m::"+Math.random().toString(36).slice(2,8);
+
         (parent.descendants??=new Set()).add(memoId);
-        es.push({kind:"memo",page:pg,id:memoId,lvl:3,scope:(el.textContent+" "+(el.dataset.note||"")).slice(0,400),
-          text:el.textContent||"（メモ）", body:(el.dataset.note||""), sel:el.textContent, tags:["メモ"], parent:parent.id, children:[], el, descendants:new Set(), order:order++});
+        es.push({
+          kind:"memo",
+          page:pg,
+          id:memoId,
+          lvl:3,
+          scope: memoScope.slice(0,400),                 // 表示用
+          scopeLower: memoScope.toLowerCase().slice(0,400), // ★検索用
+          text: el.textContent || "（メモ）",
+          body: (el.dataset.note||""),
+          sel: el.textContent,
+          tags:["メモ"],
+          parent: parent.id,
+          children:[],
+          el,
+          descendants:new Set(),
+          order:order++
+        });
       }
     });
     es.forEach(e=>{if(e.order===undefined) e.order=order++;});
