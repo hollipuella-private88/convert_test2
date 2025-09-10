@@ -385,12 +385,37 @@ function renderTool(area){
           input.placeholder = word;                   /* ← 短いプレースホルダー：変換語だけ */
           input.value = stateTool.values[word] || "";
 
-          // 入力イベント（IME対応＋閉じた時の取りこぼし防止）
-          input.addEventListener("compositionstart",()=>{stateTool.composing=true;});
-          input.addEventListener("compositionend",()=>{stateTool.composing=false; stateTool.values[word]=input.value; stateTool.dirty=true;});
-          input.addEventListener("input",()=>{ if(stateTool.composing) return; stateTool.values[word]=input.value; stateTool.dirty=true; });
-          input.addEventListener("blur", ()=>{ stateTool.values[word]=input.value; stateTool.dirty=true; });
-          input.addEventListener("change",()=>{ stateTool.values[word]=input.value; stateTool.dirty=true; });
+          // 変換欄のイベント（即時適用）
+input.addEventListener("compositionstart",()=>{
+  stateTool.composing=true;
+});
+
+input.addEventListener("compositionend",()=>{
+  stateTool.composing=false;
+  stateTool.values[word]=input.value;
+  stateTool.dirty=true;
+  applyReplacements_ifNeeded();     // ★IME確定で即反映
+});
+
+input.addEventListener("input",()=>{
+  if(stateTool.composing) return;
+  stateTool.values[word]=input.value;
+  stateTool.dirty=true;
+  applyReplacements_ifNeeded();     // ★通常入力で即反映
+});
+
+input.addEventListener("blur", ()=>{
+  stateTool.values[word]=input.value;
+  stateTool.dirty=true;
+  applyReplacements_ifNeeded();     // ★フォーカス抜けも保険
+});
+
+input.addEventListener("change",()=>{
+  stateTool.values[word]=input.value;
+  stateTool.dirty=true;
+  applyReplacements_ifNeeded();     // ★保険
+});
+
 
           wrap.appendChild(input); area.appendChild(wrap);
         }
@@ -533,22 +558,32 @@ function renderVirtual(list,ws,preserve){
 }
 
 /* ===== highlight & links ===== */
-function clearHL(){ $$(".hl-tmp",sc).forEach(m=>m.replaceWith(document.createTextNode(m.textContent))); }
-function highlight(el,ws){
-  const tw=document.createTreeWalker(el.closest("section")||sc,NodeFilter.SHOW_TEXT,{acceptNode(n){
-    if(!n.nodeValue.trim())return NodeFilter.FILTER_REJECT;
-    const p=n.parentElement;
-    if(p&&(p.closest("pre,code,.code")||p.classList.contains("note"))) return NodeFilter.FILTER_REJECT;
-    return NodeFilter.FILTER_ACCEPT;
-  }});
-  const re=new RegExp("("+ws.map(w=>w.replace(/[.*+?^${}()|[\\]\\\\]/g,"\\$&")).join("|")+")","ig"), targets=[];
-  while(tw.nextNode()){const n=tw.currentNode; if(re.test(n.nodeValue)) targets.push(n);}
+function highlight(el, ws, includeCode=false){
+  const root = (el.closest("section")||sc);
+  const tw=document.createTreeWalker(root,NodeFilter.SHOW_TEXT,{
+    acceptNode(n){
+      if(!n.nodeValue.trim()) return NodeFilter.FILTER_REJECT;
+      const p=n.parentElement;
+      if(!includeCode && p && p.closest("pre,code,.code")) return NodeFilter.FILTER_REJECT; // ←オプション
+      if(p && p.classList.contains("note")) return NodeFilter.FILTER_REJECT;
+      return NodeFilter.FILTER_ACCEPT;
+    }
+  });
+  const re=new RegExp("("+ws.map(w=>w.replace(/[.*+?^${}()|[\]\\]/g,"\\$&")).join("|")+")","ig");
+  const targets=[];
+  while(tw.nextNode()){ const n=tw.currentNode; if(re.test(n.nodeValue)) targets.push(n); }
   targets.forEach(n=>{
     const parts=n.nodeValue.split(re), f=document.createDocumentFragment();
-    parts.forEach(t=>{ if(!t) return; if(ws.some(w=>t.toLowerCase()===w.toLowerCase())){ const m=document.createElement("mark"); m.className="hl-tmp"; m.textContent=t; f.appendChild(m);} else f.appendChild(document.createTextNode(t));});
+    parts.forEach(t=>{
+      if(!t) return;
+      if(ws.some(w=>t.toLowerCase()===w.toLowerCase())){
+        const m=document.createElement("mark"); m.className="hl-tmp"; m.textContent=t; f.appendChild(m);
+      }else{ f.appendChild(document.createTextNode(t)); }
+    });
     n.parentNode.replaceChild(f,n);
   });
 }
+
 addEventListener("hashchange",()=>{
   const {id,page}=parseHash(location.hash); if(!id) return; const ent=ID.get(id); if(!ent) return;
   const targetPage=page||ent.page, act=()=>{ const sec=pages.find(p=>p.dataset.page===targetPage);
@@ -571,7 +606,8 @@ function jump(e,ws){
 
     clearHL();
     if(ws.length && e.kind!=="memo"){
-      highlight(e.el, ws);                                         // セクション内に .hl-tmp を生成
+      highlight(e.el, ws, true);  // ← コードも含めてマーク
+                                         // セクション内に .hl-tmp を生成
       const target = firstMarkUnderHeading(e.el) || $(".hl-tmp");  // ★カード範囲の最初の一致へ
       (target || e.el).scrollIntoView({block:"center",behavior:"smooth"});
     }
@@ -788,16 +824,6 @@ function applyReplacements_ifNeeded(){
   const run=()=>applyReplacements();
   if("requestIdleCallback" in window){ requestIdleCallback(run,{timeout:300}); } else { setTimeout(run,0); }
 }
-
-/* ===== Triggers for A + B + IME guard ===== */
-let armed=true;
-function armOnce(){ armed=true; }
-["pointerdown","wheel","keydown"].forEach(ev=>{
-  sc.addEventListener(ev,()=>{ if(armed){ armed=false; applyReplacements_ifNeeded(); } },{passive:true});
-});
-addEventListener("hashchange",()=>{ if(armed){ armed=false; applyReplacements_ifNeeded(); }});
-tabs.forEach(b=>b.addEventListener("click",()=>{ if(armed){ armed=false; applyReplacements_ifNeeded(); }}));
-btnT.addEventListener("click",()=>{ setTimeout(armOnce,0); });
 
 /* ===== init ===== */
 autoBoxCodes();
