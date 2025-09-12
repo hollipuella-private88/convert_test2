@@ -60,7 +60,7 @@ nav.tabs{position:sticky;inset-block-end:0;block-size:var(--tabs);display:grid;g
 .card .title{font-weight:700;margin:.2em 0}
 .card .fulltext{
   display:-webkit-box;
-  -webkit-line-clamp:1;          /* 閉時は1行表示 */
+  -webkit-line-clamp:1;
   -webkit-box-orient:vertical;
   overflow:hidden;
   text-overflow:ellipsis;
@@ -94,11 +94,11 @@ pre.code .copy.done{background:#e1f6e7;border-color:#b9ebc9}
 .btn.danger{color:#b00}
 mark.hl{background:#fff3a0}
 
-/* tool: 変換語 見出しの下線 & 入力欄の角丸 */
+/* tool */
 .tool-word{border-bottom:1px solid var(--line);padding-bottom:4px}
 .input-box{width:100%;border:1px solid var(--line);border-radius:8px;padding:.5em .7em;margin:6px 0 12px;background:#fff}
 
-/* --- card preview spacing fix --- */
+/* preview spacing fix */
 .card .fulltext > :first-child{ margin-block-start:0 !important; }
 .card .fulltext > :last-child { margin-block-end:0 !important; }
 .card .fulltext > p,
@@ -108,6 +108,10 @@ mark.hl{background:#fff3a0}
 .card .fulltext > blockquote { margin-block:.35em .4em; }
 
 @media(max-width:768px){.toc{grid-template-columns:98px 1fr}}
+</style>
+<style>
+/* 任意：OSダークモードのときの配色（1行で変数切替） */
+@media (prefers-color-scheme: dark){:root{--bg:#101214;--text:#e8eaed;--line:#30363d;--accent:#0b253f;--accent2:#21486e}}
 </style>
 </head>
 <body>
@@ -153,6 +157,9 @@ mark.hl{background:#fff3a0}
 (()=>{"use strict";
 /* ===== util & state ===== */
 const $=(s,r=document)=>r.querySelector(s), $$=(s,r=document)=>Array.from(r.querySelectorAll(s));
+// 共通：正規表現エスケープ
+const reEsc = s => s.replace(/[.*+?^${}()|[\]\\]/g,"\\$&");
+
 const sc=$("#sc"), pages=$$(".page"), tabs=$$(".tab"), toc=$("#toc"), sea=$("#sea"), btnT=$("#btnToc"), btnS=$("#btnSearch");
 const MOBILE=()=>matchMedia("(max-width:768px)").matches;
 const vp=()=>{const x=visualViewport;return x?{x:x.offsetLeft,y:x.offsetTop,w:x.width,h:x.height}:{x:0,y:0,w:innerWidth,h:innerHeight};};
@@ -168,7 +175,6 @@ let S={page:"info",index:new Map(),tags:new Set()}, ALL=[], ENT=new Map(), ID=ne
 /* drawers & buttons */
 const updIcon=()=>{ btnS.textContent=sea.classList.contains("open")?"▶":"◀"; };
 
-// ドロワー閉じ時、文字変換の入力値を強制回収して適用（保険）
 function flushToolInputs(){
   const inputs = document.querySelectorAll('#tocArea .input-box');
   let changed = false;
@@ -185,13 +191,11 @@ function flushToolInputs(){
 }
 
 const setOpen=(el,on)=>{
-  el.classList.toggle("open",!!on);
+  const willOpen=!!on;
+  el.classList.toggle("open",willOpen);
   if(el===sea) updIcon();
-  if(on && el===toc) sea.classList.remove("open");
-  if(!on && el===toc){            // ドロワー閉じ＝保険で適用
-    flushToolInputs();
-    applyReplacements_ifNeeded();
-  }
+  if(willOpen && el===toc) sea.classList.remove("open");
+  if(!willOpen && el===toc){ flushToolInputs(); applyReplacements_ifNeeded(); }
 };
 btnT.onclick=()=>setOpen(toc,!toc.classList.contains("open"));
 btnS.onclick=()=>setOpen(sea,!sea.classList.contains("open")); updIcon();
@@ -221,7 +225,7 @@ function collectText(root,{includeCode=false}={}){
   while(tw.nextNode()) out+=" "+tw.currentNode.nodeValue.trim();
   return out.replace(/\s+/g," ").trim();
 }
-function bodyText(h){ // code除外の本文
+function bodyText(h){
   const L=h.tagName, stop=L==="H1"?/^(H1|H2|H3)$/:L==="H2"?/^(H2|H3)$/:/^H3$/;
   let s="", n=h.nextSibling;
   while(n){
@@ -241,11 +245,12 @@ function buildIndex(){
   pages.forEach(sec=>{
     const pg=sec.dataset.page, its=heads(sec), es=[], byId=new Map();
     its.forEach(it=>{
+      const b = bodyText(it.el);
       const e={
         page:pg,id:it.id,lvl:it.l,text:it.text,
-        body:bodyText(it.el),
-        scope:(it.text+" "+bodyText(it.el)).trim(),
-        scopeLower:(it.text+" "+bodyText(it.el)).trim().toLowerCase(),
+        body:b,
+        scope:(it.text+" "+b).trim(),
+        scopeLower:(it.text+" "+b).trim().toLowerCase(),
         tags:[...new Set(it.tags)],parent:it.parent?.id||null,
         children:it.children.map(c=>c.id),el:it.el,order:undefined
       };
@@ -332,7 +337,7 @@ function renderTOC(area){
 function readConvertWords(){
   try{
     const els = document.querySelectorAll('#convert-words');
-    const el  = els[els.length - 1]; // 最後＝最新
+    const el  = els[els.length - 1];
     const obj = JSON.parse(el?.textContent || '{"words":[]}');
     return Array.isArray(obj.words) ? obj.words.filter(w => w && typeof w === "string") : [];
   }catch{ return []; }
@@ -369,7 +374,6 @@ function renderTool(area){
       area.appendChild(p);
     }else{
       stateTool.words.forEach(word=>{
-        // H2: 変換語（下線付き）
         const row=document.createElement("div"); row.className="row";
         const tw=document.createElement("div"); tw.className="tw"; tw.textContent=stateTool.secOpen[word]?"▼":"▶";
         const j=document.createElement("div"); j.textContent=word; j.classList.add("lvl2","tool-word");
@@ -380,10 +384,9 @@ function renderTool(area){
         if(stateTool.secOpen[word]){
           const wrap=document.createElement("div"); wrap.style.margin="0 8px 0 48px";
           const input=document.createElement("input"); input.type="text"; input.className="input-box";
-          input.placeholder = word;                   /* プレースホルダー＝変換語だけ */
+          input.placeholder = word;
           input.value = stateTool.values[word] || "";
 
-          // 即時適用（IME配慮）
           input.addEventListener("compositionstart",()=>{stateTool.composing=true;});
           input.addEventListener("compositionend",()=>{
             stateTool.composing=false; stateTool.values[word]=input.value; stateTool.dirty=true; applyReplacements_ifNeeded();
@@ -415,12 +418,12 @@ q.addEventListener("focus", clearHL);
 const words=s=>(s||"").replace(/[　]/g," ").trim().split(/\s+/).filter(Boolean).map(w=>w.toLowerCase());
 const debounce=(f,w=250)=>{ let t; return (...a)=>{ clearTimeout(t); t=setTimeout(()=>f(...a), w); }; };
 
-function tokensForFilter(rawTokens){ return rawTokens.map(t=>t.toLowerCase()); } // 変換前でフィルタ
+function tokensForFilter(rawTokens){ return rawTokens.map(t=>t.toLowerCase()); }
 function tokensForHighlight(rawTokens){
   const values = stateTool.values || loadReplacerValues();
   const entries = Object.entries(values).filter(([k,v]) => typeof v === "string" && v.length);
-  const mapFwd = new Map(entries.map(([k,v]) => [k.toLowerCase(), v.toLowerCase()])); // 原→変
-  const mapRev = new Map(entries.map(([k,v]) => [v.toLowerCase(), k.toLowerCase()])); // 変→原
+  const mapFwd = new Map(entries.map(([k,v]) => [k.toLowerCase(), v.toLowerCase()]));
+  const mapRev = new Map(entries.map(([k,v]) => [v.toLowerCase(), k.toLowerCase()]));
   const out = new Set();
   for(const t of rawTokens){
     const x = t.toLowerCase();
@@ -493,7 +496,7 @@ function crumb(e){ const es=S.index.get(e.page)||[]; if(e.lvl===1) return e.page
   const p=es.find(x=>x.id===e.parent), p2=es.find(x=>x.id===p?.parent);
   return e.page+" ＞ "+(p2?.text||"")+" ＞ "+(p?.text||"");}
 
-/* 見出しは含めず、本文クローンを返す（コピー/メモ等の相互作用は除去） */
+/* 見出しは含めず、本文クローンを返す */
 function getHeadingRangeFragment(e){
   const h = e.el;
   const L = h.tagName;
@@ -515,7 +518,6 @@ function getHeadingRangeFragment(e){
   return frag;
 }
 
-/* 見出し e.el の本文範囲で、最初の .hl-tmp を探す（カード用） */
 function firstMarkUnderHeading(h){
   if(!h) return null;
   const L = h.tagName;
@@ -532,7 +534,6 @@ function firstMarkUnderHeading(h){
   return null;
 }
 
-/* カード：全文を一つのDOMで保持（閉＝省略、開＝そのまま全文） */
 function makeCard(e, ws){
   const card=document.createElement("div"); card.className="card";
 
@@ -549,7 +550,6 @@ function makeCard(e, ws){
   const full=document.createElement("div"); full.className="fulltext";
 
   if(e.kind==="memo"){
-    // メモ本文を改行反映で表示（エスケープ＋<br>）
     const safe = (e.body||"")
       .replace(/&/g,"&amp;")
       .replace(/</g,"&lt;")
@@ -586,7 +586,7 @@ function highlight(el,ws,includeCode=false){
     if(p && p.classList.contains("note")) return NodeFilter.FILTER_REJECT;
     return NodeFilter.FILTER_ACCEPT;
   }});
-  const re=new RegExp("("+ws.map(w=>w.replace(/[.*+?^${}()|[\\]\\\\]/g,"\\$&")).join("|")+")","ig"), targets=[];
+  const re=new RegExp("("+ws.map(reEsc).join("|")+")","ig"), targets=[];
   while(tw.nextNode()){const n=tw.currentNode; if(re.test(n.nodeValue)) targets.push(n);}
   targets.forEach(n=>{
     const parts=n.nodeValue.split(re), f=document.createDocumentFragment();
@@ -602,18 +602,18 @@ addEventListener("hashchange",()=>{
 });
 function linkNames(){
   $$('a[href^="#"]',sc).forEach(a=>{
-    if(a.textContent.trim()) return; const {id,page}=parseHash(a.getAttribute("href")); const ent=ID.get(id); if(!ent) return;
-    a.textContent=ent.text; a.title=ent.text;
+    const {id,page}=parseHash(a.getAttribute("href")); const ent=ID.get(id); if(!ent) return;
+    if(!a.textContent.trim()){ a.textContent=ent.text; a.title=ent.text; }
     a.addEventListener("click",ev=>{ev.preventDefault(); location.hash="#"+((page||ent.page)+":"+id);},{once:true});
   });
 }
 function jump(e,ws){
   const go=()=>{
     e.el.scrollIntoView({block:"start",behavior:"smooth"});
-    applyReplacements_ifNeeded();                 // 置換同期
+    applyReplacements_ifNeeded();
     clearHL();
     if(ws.length && e.kind!=="memo"){
-      highlight(e.el, ws, true);                 // コードも含めてハイライト
+      highlight(e.el, ws, true);
       const target = firstMarkUnderHeading(e.el) || $(".hl-tmp");
       (target || e.el).scrollIntoView({block:"center",behavior:"smooth"});
     }
@@ -737,9 +737,9 @@ function persistNotes(){
     const page=sec.dataset.page;
     $$(".note",sec).forEach(span=>{
       const h=nearestHeading(span); if(!h) return; const hid=h.dataset.id||h.id; if(!hid) return;
-      const blocks=textBlocksUnderHeading(h); const blk=blockOf2(span); const bIndex=blocks.indexOf(blk); if(bIndex<0) return;
+      const blocks=textBlocksUnderHeading(h); const blk=blocks[blocks.indexOf(blockOf2(span))]; if(!blk) return;
       const start=globalOffsetInBlock(blk,span); const length=span.textContent.length;
-      out.push({page,hid,bIndex,start,length,body:span.dataset.note||"",sel:span.textContent});
+      out.push({page,hid,bIndex:blocks.indexOf(blk),start,length,body:span.dataset.note||"",sel:span.textContent});
     });
   });
   try{ localStorage.setItem(MEMO_KEY, JSON.stringify(out)); }catch{}
@@ -770,10 +770,10 @@ function buildSnapshot(){
       if(!n.nodeValue.trim()) return NodeFilter.FILTER_REJECT;
       const p = n.parentElement;
       if(p && (
-         p.closest("pre,code,.code") ||     // コード除外
-         p.closest(".note") ||              // メモ除外
-         p.closest("a[href^='#']") ||       // ジャンプリンク除外
-         p.closest("h1,h2,h3")              // 見出し除外
+         p.closest("pre,code,.code") ||
+         p.closest(".note") ||
+         p.closest("a[href^='#']") ||
+         p.closest("h1,h2,h3")
       )) return NodeFilter.FILTER_REJECT;
       return NodeFilter.FILTER_ACCEPT;
     }
@@ -782,7 +782,6 @@ function buildSnapshot(){
     snapshot.push({ node: tw.currentNode, text: tw.currentNode.nodeValue });
   }
 }
-// 最長一致＋完全一致。空欄置換値は無視して原文維持
 function replaceInString(s){
   if(!s) return s;
   const vals = stateTool.values || loadReplacerValues();
@@ -790,8 +789,7 @@ function replaceInString(s){
     .filter(([k,v]) => typeof k === "string" && k.length > 0 && typeof v === "string" && v.length > 0);
   if(entries.length === 0) return s;
   const keys = entries.map(([k]) => k).sort((a,b) => b.length - a.length);
-  const esc = x => x.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const pattern = new RegExp(keys.map(esc).join("|"), "g");
+  const pattern = new RegExp(keys.map(reEsc).join("|"), "g");
   const table = new Map(entries);
   return s.replace(pattern, (m) => table.get(m));
 }
@@ -801,10 +799,10 @@ function replaceInNodeTree(root){
       if(!n.nodeValue.trim()) return NodeFilter.FILTER_REJECT;
       const p = n.parentElement;
       if(p && (
-         p.closest("pre,code,.code") ||     // コード除外
-         p.closest(".note") ||              // メモ除外
-         p.closest("a[href^='#']") ||       // ジャンプリンク除外
-         p.closest("h1,h2,h3")              // 見出し除外
+         p.closest("pre,code,.code") ||
+         p.closest(".note") ||
+         p.closest("a[href^='#']") ||
+         p.closest("h1,h2,h3")
       )) return NodeFilter.FILTER_REJECT;
       return NodeFilter.FILTER_ACCEPT;
     }
@@ -816,7 +814,7 @@ function replaceInNodeTree(root){
 function applyReplacements(){
   if(!snapshot.length) buildSnapshot();
   const vals=stateTool.values||loadReplacerValues();
-  const entries=Object.entries(vals).filter(([k,v])=>typeof v==="string" && v.length > 0); // 空欄は除外
+  const entries=Object.entries(vals).filter(([k,v])=>typeof v==="string" && v.length > 0);
   if(!entries.length){
     snapshot.forEach(s=>{ if(s.node.nodeValue!==s.text) s.node.nodeValue=s.text; });
     return;
@@ -824,12 +822,9 @@ function applyReplacements(){
   snapshot.forEach(s=>{ const next=replaceInString(s.text); if(s.node.nodeValue!==next) s.node.nodeValue=next; });
 }
 function applyReplacements_ifNeeded(){
-  if(stateTool.composing) return;
-  if(!stateTool.dirty) return;
-  stateTool.dirty=false;
-  try{ localStorage.setItem(REPL_KEY, JSON.stringify(stateTool.values)); }catch{}
-  const run=()=>applyReplacements();
-  if("requestIdleCallback" in window){ requestIdleCallback(run,{timeout:300}); } else { setTimeout(run,0); }
+  if(stateTool.composing || !stateTool.dirty) return;
+  stateTool.dirty=false; try{ localStorage.setItem(REPL_KEY, JSON.stringify(stateTool.values)); }catch{}
+  (window.requestIdleCallback||((fn)=>setTimeout(fn,0)))(()=>applyReplacements());
 }
 
 /* ===== init ===== */
