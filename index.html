@@ -9,8 +9,9 @@ body{font:14px/1.7 system-ui,-apple-system,"Segoe UI",Roboto,"Noto Sans JP","Mei
 h1{font-size:20px;margin:0 0 8px}
 .wrap{display:grid;grid-template-columns:1fr;gap:12px;max-width:1200px;margin:0 auto}
 textarea{width:100%;min-height:38vh;padding:10px;border:1px solid #ddd;border-radius:8px;background:#fff;resize:vertical;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
-.controls{display:flex;flex-wrap:wrap;gap:8px}
+.controls{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
 button{border:1px solid #ccc;border-radius:8px;background:#fff;padding:.5em .9em;cursor:pointer}
+input[type="file"]{display:inline-block}
 .out{min-height:38vh}
 small.note{color:#666}
 </style>
@@ -21,7 +22,9 @@ small.note{color:#666}
   <div class="controls">
     <button id="btnConvert">変換</button>
     <button id="btnDownload">ダウンロード</button>
-    <span id="status"><small class="note">同フォルダの <code>template.html</code> を読み込みます。<br>◆ convertは本文に残さず、各行=1語で抽出→<code>id="convert-words"</code> にJSON埋め込み。</small></span>
+    <!-- ▼ 追加：テンプレート選択（未選択なら template.html を使用） -->
+    <input id="tplFile" type="file" accept=".html,.htm" title="テンプレートを選択（未選択なら template.html を使用）">
+    <span id="status"><small class="note">同フォルダの <code>template.html</code> を読み込みます。必要ならテンプレートを選択してください。</small></span>
   </div>
   <textarea id="src" placeholder="1行目=タイトル、2行目=固定キー（[A-Za-z0-9_-]）&#10;◆ convert&#10;HO1&#10;PC&#10;◆ info&#10;# はじめに&#10;本文…"></textarea>
   <textarea id="dst" class="out" placeholder="ここに完成HTMLが出力されます"></textarea>
@@ -32,10 +35,13 @@ small.note{color:#666}
 /* === util === */
 const $=s=>document.querySelector(s);
 const src=$("#src"), dst=$("#dst"), btnC=$("#btnConvert"), btnD=$("#btnDownload"), status=$("#status");
+const tplPicker=$("#tplFile"); // ← 追加
 const VALID_KEY=/^[A-Za-z0-9_-]+$/;
 const keep=s=>s; // 見出し名は記号含め保持
 const hashOf=s=>{let h=5381;for(const ch of s){h=((h<<5)+h)+ch.codePointAt(0);h|=0}return(h>>>0).toString(36)};
 const uniqueId=(base,taken)=>{let id=base,n=2;while(taken.has(id)) id=base+"-"+(n++); taken.add(id); return id};
+const sanitizeFileName = s => (s||"").replace(/[\\\/:*?"<>|]/g,"_").slice(0,128) || "scenario"; // ← 追加
+let lastDownloadName = "scenario.html"; // ← 追加
 
 /* === インライン装飾（** * __ ~~） === */
 function applyInlineMarks(str){
@@ -153,9 +159,15 @@ function parseInput(raw){
   return {title, key, pages, dict, convertWords:[...new Set(convertWords)]};
 }
 
-/* === template.html に差し込み（convert-words を JSON で埋め込む） === */
+/* === template.html 差し込み（convert-words を JSON で埋め込む） === */
 async function buildHTML(parsed){
-  const tpl=await fetch("template.html").then(r=>{ if(!r.ok) throw new Error("template.html が読み込めませんでした。"); return r.text(); });
+  // ▼ 変更：ファイル選択があればそれを優先。なければ template.html をfetch
+  let tpl;
+  if (tplPicker && tplPicker.files && tplPicker.files[0]) {
+    tpl = await tplPicker.files[0].text();
+  } else {
+    tpl = await fetch("template.html").then(r=>{ if(!r.ok) throw new Error("template.html が読み込めませんでした。"); return r.text(); });
+  }
   const doc=new DOMParser().parseFromString(tpl,"text/html");
 
   // タイトル & 固定キー
@@ -181,19 +193,18 @@ async function buildHTML(parsed){
   };
   mount("info",parsed.pages.info); mount("main",parsed.pages.main); mount("etc",parsed.pages.etc);
 
-// ◆ convert → JSON を埋め込み（template 側が読む）
-// 既存があれば置換、無ければ新規（重複防止）
-const data = JSON.stringify({ words: parsed.convertWords }, null, 0);
-let holder = doc.querySelector('#convert-words');
-if (holder) {
-  holder.textContent = data;
-} else {
-  holder = doc.createElement('script');
-  holder.type = 'application/json';
-  holder.id = 'convert-words';
-  holder.textContent = data;
-  doc.body.appendChild(holder);
-}
+  // ◆ convert → JSON を埋め込み（template 側が読む）
+  const data = JSON.stringify({ words: parsed.convertWords }, null, 0);
+  let holder = doc.querySelector('#convert-words');
+  if (holder) {
+    holder.textContent = data;
+  } else {
+    holder = doc.createElement('script');
+    holder.type = 'application/json';
+    holder.id = 'convert-words';
+    holder.textContent = data;
+    doc.body.appendChild(holder);
+  }
 
   return "<!doctype html>\n"+doc.documentElement.outerHTML;
 }
@@ -203,6 +214,8 @@ btnC.onclick=async ()=>{
   try{
     status.textContent="変換中…";
     const parsed=parseInput(src.value||"");
+    // ▼ 追加：ダウンロード名（2行目の固定キー優先、次にタイトル）
+    lastDownloadName = sanitizeFileName(parsed.key || parsed.title || "scenario") + ".html";
     const html=await buildHTML(parsed);
     dst.value=html;
     status.textContent=`完了 ✔️（convert語: ${parsed.convertWords.length}件）`;
@@ -210,7 +223,9 @@ btnC.onclick=async ()=>{
 };
 btnD.onclick=()=>{
   const blob=new Blob([dst.value||""],{type:"text/html;charset=utf-8"});
-  const a=document.createElement("a"); a.href=URL.createObjectURL(blob); a.download="scenario.html"; a.click();
+  const a=document.createElement("a"); a.href=URL.createObjectURL(blob);
+  a.download=lastDownloadName; // ← 変更：固定キー（2行目）由来の名前を使用
+  a.click();
   setTimeout(()=>URL.revokeObjectURL(a.href),1000);
 };
 })();
