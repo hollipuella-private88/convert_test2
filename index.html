@@ -1,234 +1,765 @@
-<!doctype html>
-<html lang="ja">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>TRPGシナリオHTML変換器</title>
-<style>
-body{font:14px/1.7 system-ui,-apple-system,"Segoe UI",Roboto,"Noto Sans JP","Meiryo",sans-serif;margin:0;padding:16px;background:#fafafa;color:#222}
-h1{font-size:20px;margin:0 0 8px}
-.wrap{display:grid;grid-template-columns:1fr;gap:12px;max-width:1200px;margin:0 auto}
-textarea{width:100%;min-height:38vh;padding:10px;border:1px solid #ddd;border-radius:8px;background:#fff;resize:vertical;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
-.controls{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
-button{border:1px solid #ccc;border-radius:8px;background:#fff;padding:.5em .9em;cursor:pointer}
-input[type="file"]{display:inline-block}
-.out{min-height:38vh}
-small.note{color:#666}
-</style>
-</head>
-<body>
-<div class="wrap">
-  <h1>TRPGシナリオHTML変換器</h1>
-  <div class="controls">
-    <button id="btnConvert">変換</button>
-    <button id="btnDownload">ダウンロード</button>
-    <!-- ▼ 追加：テンプレート選択（未選択なら template.html を使用） -->
-    <input id="tplFile" type="file" accept=".html,.htm" title="テンプレートを選択（未選択なら template.html を使用）">
-    <span id="status"><small class="note">同フォルダの <code>template.html</code> を読み込みます。必要ならテンプレートを選択してください。</small></span>
-  </div>
-  <textarea id="src" placeholder="1行目=タイトル、2行目=固定キー（[A-Za-z0-9_-]）&#10;◆ convert&#10;HO1&#10;PC&#10;◆ info&#10;# はじめに&#10;本文…"></textarea>
-  <textarea id="dst" class="out" placeholder="ここに完成HTMLが出力されます"></textarea>
-</div>
+<!doctype html><meta charset="utf-8">
+<div id="root"></div>
+<script src="https://unpkg.com/react@18/umd/react.development.js"></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
 
-<script>
-(()=>{"use strict";
-/* === util === */
-const $=s=>document.querySelector(s);
-const src=$("#src"), dst=$("#dst"), btnC=$("#btnConvert"), btnD=$("#btnDownload"), status=$("#status");
-const tplPicker=$("#tplFile"); // ← 追加
-const VALID_KEY=/^[A-Za-z0-9_-]+$/;
-const keep=s=>s; // 見出し名は記号含め保持
-const hashOf=s=>{let h=5381;for(const ch of s){h=((h<<5)+h)+ch.codePointAt(0);h|=0}return(h>>>0).toString(36)};
-const uniqueId=(base,taken)=>{let id=base,n=2;while(taken.has(id)) id=base+"-"+(n++); taken.add(id); return id};
-const sanitizeFileName = s => (s||"").replace(/[\\\/:*?"<>|]/g,"_").slice(0,128) || "scenario"; // ← 追加
-let lastDownloadName = "scenario.html"; // ← 追加
+<script type="text/babel">
 
-/* === インライン装飾（** * __ ~~） === */
-function applyInlineMarks(str){
-  const root=document.createDocumentFragment(); let i=0;
-  const pats=[{re:/\*\*([^*]+)\*\*/y,tag:"strong"},{re:/\*([^*]+)\*/y,tag:"em"},{re:/__([^_]+)__/y,tag:"u"},{re:/~~([^~]+)~~/y,tag:"s"}];
-  while(i<str.length){
-    let matched=false;
-    for(const p of pats){ p.re.lastIndex=i; const m=p.re.exec(str);
-      if(m){ if(m.index>i) root.appendChild(document.createTextNode(str.slice(i,m.index)));
-        const el=document.createElement(p.tag); el.appendChild(document.createTextNode(m[1])); root.appendChild(el);
-        i=p.re.lastIndex; matched=true; break; } }
-    if(!matched){ root.appendChild(document.createTextNode(str[i++])); }
-  }
-  return root;
+/*
+<javascriptresource>
+<name>CMYK値を整理</name>
+<category>Yamo/CMYKGCR100</category>
+</javascriptresource>
+*/
+
+// Ver 1.0 (2025/10/02)
+
+#target illustrator
+
+// 設定値: マップ生成の分解能（不等間隔ステップ／最大20要素）
+var STEPS = [0,10,20,30,40,50,60,70,80,85,90,95,100];
+
+
+// Lab格子の量子化幅（固定）
+var QL = 1;  // L*
+var QA = 1;  // a*（ab量子化・固定）
+var QB = 1;  // b*（ab量子化・固定）
+// 近傍探索のΔE半径パラメータ（rCap/rHardCap は上限として扱う）
+var R_START = 15;  // 初期R（平均拡張回数をさらに下げる）
+var R_STEP  = 2;  // Rの増分
+var R_PAD_MAX = 5.0; // 保険拡張の最大追加幅
+
+// 閾値（%）: これ以下は0, これ以上は100 に丸め
+var ZERO_THR = 3;   // ≤ ZERO_THR → 0
+var FULL_THR = 100;  // ≥ FULL_THR → 100
+
+// K-only を使うシャドウ判定のしきい値
+var AB_TOL   = 4;  // |ab| <= AB_TOL ならニュートラル扱い
+var L_MARGIN = 2;  // 黒点Lからの許容マージン
+var _L_BLACK_CACHE = null;
+function getLBlack(){
+    if (_L_BLACK_CACHE === null) {
+        // RGB(0,0,0) → CMYK → Lab で黒点を取得（プロファイルに依存）
+        var cmyk = app.convertSampleColor(
+            ImageColorSpace.RGB, [0,0,0],
+            ImageColorSpace.CMYK, ColorConvertPurpose.defaultpurpose
+        );
+        var lb = cmykToLab(cmyk[0], cmyk[1], cmyk[2], cmyk[3]);
+        _L_BLACK_CACHE = lb.L;
+    }
+    return _L_BLACK_CACHE;
 }
 
-/* === 段落内ジャンプ → <a> === */
-function formatParagraph(text, currentPage, dict){
-  const frag=document.createDocumentFragment(), N=text.length, isW=ch=>/\s/.test(ch);
-  function parseJump(s,i){
-    const leftOK=(i===0)||isW(s[i-1]); if(!leftOK) return null;
-    let j=i, page=null;
-    if(s[j]==="◆"){
-      const rest=s.slice(j+1);
-      if(rest.startsWith("info#")){ page="info"; j+=1+"info".length; }
-      else if(rest.startsWith("main#")){ page="main"; j+=1+"main".length; }
-      else if(rest.startsWith("etc#")) { page="etc";  j+=1+"etc".length; }
-      else return null;
-      if(s[j]!=="#") return null;
-    }else if(s[j]!=="#") return null;
-    const labels=[]; let pos=j+1;
-    const readLabel=p=>{ let q=p; for(;q<N;q++){ if(isW(s[q])) break; if(s[q]==="#"&&(s.slice(q,q+2)==="##"||s.slice(q,q+3)==="###")) break; } return s.slice(p,q); };
-    const l1=readLabel(pos); if(!l1) return null; pos+=l1.length; labels.push(l1);
-    if(s.slice(pos,pos+2)==="##"){ pos+=2; const l2=readLabel(pos); if(!l2) return null; pos+=l2.length; labels.push(l2); }
-    if(s.slice(pos,pos+3)==="###"){ pos+=3; const l3=readLabel(pos); if(!l3) return null; pos+=l3.length; labels.push(l3); }
-    const rightOK=(pos>=N)||isW(s[pos]); if(!rightOK) return null;
-    return {len:pos-i, page, labels};
-  }
-  let i=0, buf=""; const flush=()=>{ if(buf){ frag.appendChild(applyInlineMarks(buf)); buf=""; } };
-  while(i<N){
-    const ch=text[i]; if(ch!=="#"&&ch!=="◆"){ buf+=ch; i++; continue; }
-    const hit=parseJump(text,i); if(!hit){ buf+=ch; i++; continue; }
-    flush();
-    const {page,labels,len}=hit, labs=labels.map(keep), target=page||currentPage, key=labs.join(">"), id=dict[target].get(key)||dict[target].get(labs.at(-1))||null;
-    if(id){ const a=document.createElement("a"); a.href=page?("#"+target+":"+id):("#"+id); a.textContent=labs.at(-1); frag.appendChild(a); }
-    else{ frag.appendChild(applyInlineMarks(text.slice(i,i+len))); }
-    i+=len;
-  }
-  flush(); return frag;
+// 近傍微調整（Kも含めて同等に扱う）
+// 局所探索の刻み（%）：ステップリストの最小差分に基づくベース決定
+function minStepDelta() {
+    var md = 100; var last = null;
+    for (var i=0; i<STEPS.length; i++) {
+        var v = STEPS[i];
+        if (last !== null) { var d = v - last; if (d > 0 && d < md) md = d; }
+        last = v;
+    }
+    return (md === 100 ? 10 : md);
+}
+var REFINE_STEP = (minStepDelta() >= 10) ? 2 : 1;  // 最小差分が粗いなら2%、細かければ1%
+var MAX_REFINE_ITERS = 14;               // 反復上限
+
+// グローバル参照用のLabインデックス（apply系から参照）
+var gLabIndex = null;
+
+// 進行状況バー（ScriptUI）: バーのみ、幅400px、分母は動的に+10%
+var gProgress = null;
+function createProgressBar(initialMax) {
+    var win = new Window('palette', 'CMYK値を整理中...', undefined, {closeButton:false});
+    var bar = win.add('progressbar', undefined, 0, Math.max(1, initialMax|0));
+    bar.preferredSize = [400, 20];
+    win.layout.layout(true); win.center(); win.show();
+    var state = { win: win, bar: bar, value: 0, max: Math.max(1, initialMax|0) };
+    return {
+        step: function(n){
+            if (!n) n = 1;
+            state.value += n;
+            if (state.value > state.max) { // 分母を10%増やす
+                state.max = Math.ceil(state.max * 1.10);
+                state.bar.maxvalue = state.max;
+            }
+            state.bar.value = Math.min(state.value, state.max);
+            try { state.win.update(); } catch(e) {}
+        },
+        close: function(){ try { state.win.close(); } catch(e) {} }
+    };
 }
 
-/* === ページマーカー === */
-const detectPageMarker=line=>line.replace(/\r/g,"").replace(/[ \t\u3000]+/g," ").trim().match(/^◆\s*(info|main|etc|convert)$/i)?.[1]?.toLowerCase()||null;
+/////////////////////////////////////////
+// ユーティリティ関数
+/////////////////////////////////////////
 
-/* === 原稿パース（convertは本文を作らず語だけ抽出） === */
-function parseInput(raw){
-  const lines=raw.replace(/\r\n?/g,"\n").split("\n");
-  if(lines.length<2) throw new Error("先頭2行（タイトル/固定キー）が不足しています。");
-  const title=lines[0].trim(), key=lines[1].trim();
-  if(!title) throw new Error("タイトルが空です。");
-  if(!VALID_KEY.test(key)) throw new Error("固定キーが不正です。使用可能文字は [A-Za-z0-9_-] のみ。");
+// Lab値を格子キーに変換
+function labKeyFrom(L, a, b) {
+    var Li = Math.round(L / QL);
+    var Ai = Math.round(a / QA);
+    var Bi = Math.round(b / QB);
+    return Li + '|' + Ai + '|' + Bi;
+}
 
-  const pages={info:[], main:[], etc:[]}, heads={info:[], main:[], etc:[]}, stacks={info:[], main:[], etc:[]}, taken={info:new Set(), main:new Set(), etc:new Set()};
-  const convertWords=[];
-  let cur="main", inCode=false, fence=null, buf=[];
+// 現在時刻をミリ秒で返す（処理時間計測用）
+function nowMs() { return (new Date()).getTime(); }
 
-  for(const lineRaw of lines.slice(2)){
-    const line=lineRaw; // 原文保持（コード等）
-    const pm=!inCode && detectPageMarker(line);
-    if(pm){ cur=pm; continue; }
+// 数値を小数第2位で丸め（表示用）
+function round2(x) { return Math.round(x * 100) / 100; }
 
-    // convert: 1行=1語（空/空白のみは無視）
-    if(cur==="convert"){
-      if(!inCode){
-        const s=line.trim();
-        if(s.length>0) convertWords.push(s);
-        continue;
-      }
+// === 入力CMYK→出力CMYK キャッシュ（丸めはキャッシュ専用: 小数1桁） ===
+var resultCache = {};
+var cacheHitCount = 0;
+function round1(v){ return Math.round(v*10)/10; }
+function cmykKey1(c,m,y,k){
+    // 小数1桁で固定文字列化（キャッシュ専用）
+    return round1(c).toFixed(1)+","+round1(m).toFixed(1)+","+round1(y).toFixed(1)+","+round1(k).toFixed(1);
+}
+function cacheGetResult(cmyk){
+    var key = cmykKey1(cmyk.c, cmyk.m, cmyk.y, cmyk.k);
+    var v = resultCache[key];
+    return v ? { c:v.c, m:v.m, y:v.y, k:v.k } : null;
+}
+function cachePutResult(inCmyk, outCmyk){
+    var key = cmykKey1(inCmyk.c, inCmyk.m, inCmyk.y, inCmyk.k);
+    var norm = intCMYK(outCmyk);          // 閾値適用前の整数化のみを保存
+    resultCache[key] = { c: norm.c, m: norm.m, y: norm.y, k: norm.k };
+}
+
+// === CMYK→Lab メモ化（キャッシュ専用丸めは小数1桁） ===
+var labConvCache = {};
+function cmykLabCacheGet(c,m,y,k){
+    var key = cmykKey1(c,m,y,k);
+    var v = labConvCache[key];
+    return v ? {L:v.L, a:v.a, b:v.b} : null;
+}
+function cmykLabCachePut(c,m,y,k, lab){
+    var key = cmykKey1(c,m,y,k);
+    labConvCache[key] = { L: lab.L, a: lab.a, b: lab.b };
+}
+
+function cmykToLab(c, m, y, k) {
+    // キャッシュ（小数1桁キー）を先に確認
+    var cached = cmykLabCacheGet(c,m,y,k);
+    if (cached) { return { L: cached.L, a: cached.a, b: cached.b }; }
+    var lab = app.convertSampleColor(
+        ImageColorSpace.CMYK,
+        [c, m, y, k],
+        ImageColorSpace.LAB,
+        ColorConvertPurpose.defaultpurpose
+    );
+    var out = { L: lab[0], a: lab[1], b: lab[2] };
+    cmykLabCachePut(c,m,y,k,out);
+    return out;
+}
+
+// ステップリストでループ
+function forStep(fn) {
+    for (var i = 0; i < STEPS.length; i++) fn(STEPS[i]);
+}
+
+// ΔE76: Lab間のユークリッド距離を計算（色差評価）
+function de76(L1, a1, b1, L2, a2, b2) {
+    var dL = L1 - L2, da = a1 - a2, db = b1 - b2;
+    return Math.sqrt(dL*dL + da*da + db*db);
+}
+
+// CMYKColor オブジェクトを生成
+function makeCMYK(c,m,y,k){ var cc=new CMYKColor(); cc.cyan=c; cc.magenta=m; cc.yellow=y; cc.black=k; return cc; }
+
+// Illustrator Color から {c,m,y,k} を取得（CMYKColorのみ）
+function extractCMYK(color){
+    if (!color) return null;
+    if (color.typename === 'CMYKColor') return { c:color.cyan, m:color.magenta, y:color.yellow, k:color.black };
+    return null; // Spot/Gray/RGB/Pattern/Gradient は対象外（Gradientは別処理）
+}
+
+// CMYK値を整数に丸め
+function intCMYK(cmyk){
+    return { c: Math.round(cmyk.c), m: Math.round(cmyk.m), y: Math.round(cmyk.y), k: Math.round(cmyk.k) };
+}
+
+// CMYK値の確定処理（閾値適用→整数化）
+function finalizeCMYK(cmyk){
+    function f(v){
+        var r = Math.round(v);            // 先に四捨五入（整数化）
+        if (r <= ZERO_THR) return 0;      // 閾値は最後に適用
+        if (r >= FULL_THR) return 100;
+        if (r < 0) r = 0; if (r > 100) r = 100;
+        return r;
+    }
+    return { c:f(cmyk.c), m:f(cmyk.m), y:f(cmyk.y), k:f(cmyk.k) };
+}
+
+
+// 共通: 動的半径で候補を収集しΔE昇順で返す（重複除去・フォールバック付き）
+function collectCandidatesDynamic(labIndex, Lq, aq, bq, rCap, rHardCap, cap) {
+    if (rCap == null) rCap = 3;
+    if (rHardCap == null) rHardCap = Math.max(rCap, 6);
+    if (cap == null) cap = 64;
+
+    var Li = Math.round(Lq / QL), Ai = Math.round(aq / QA), Bi = Math.round(bq / QB);
+    var found = [], seen = {};
+
+    function pushCandidate(t) {
+        var key = t.c + "," + t.m + "," + t.y + "," + t.k;
+        if (seen[key]) return;
+        seen[key] = true;
+        t.dE = de76(Lq, aq, bq, t.L, t.a, t.b);
+        found.push(t);
     }
 
-    // 以降は info/main/etc の処理
-    const fenceM=line.match(/^(```|''')\s*([A-Za-z0-9#+.\-_]*)\s*$/);
-    if(fenceM && !inCode){ inCode=true; fence=fenceM[1]; buf=[]; continue; }
-    if(fenceM && inCode && fenceM[1]===fence){ inCode=false; pages[cur].push({type:"node",node:{kind:"code",text:buf.join("\n")}}); continue; }
-    if(inCode){ buf.push(line); continue; }
-
-    const mh=line.match(/^(#{1,3})\s+(.+?)\s*$/);
-    if(mh){
-      const lvl=mh[1].length; let rawTxt=mh[2];
-      const tags=[...rawTxt.matchAll(/\s@([^\s@]+)/g)].map(x=>x[1]); rawTxt=rawTxt.replace(/\s@([^\s@]+)/g,"").trim();
-      if(tags.includes("メモ")) throw new Error("@メモ は使用禁止です（変換器が自動付与）。");
-      while(stacks[cur].length && stacks[cur].at(-1).lvl>=lvl) stacks[cur].pop();
-      const trail=stacks[cur].map(n=>n.text), path=[...trail,rawTxt].join(">"), id=uniqueId("h-"+hashOf(path), taken[cur]);
-      const node={lvl,text:rawTxt,id,children:[]};
-      if(stacks[cur].length) stacks[cur].at(-1).children.push(node); else heads[cur].push(node);
-      stacks[cur].push(node);
-      pages[cur].push({type:"h",level:lvl,text:rawTxt,id,tags});
-      continue;
+    // 楕円体（ΔE半径R）内のみを走査
+    function collectAtLabRadius(R) {
+        var rL = Math.ceil(R / QL);
+        var rA = Math.ceil(R / QA);
+        var rB = Math.ceil(R / QB);
+        var R2 = R * R;
+        for (var dL = -rL; dL <= rL; dL++) {
+            var dL2 = (dL * QL) * (dL * QL);
+            for (var dA = -rA; dA <= rA; dA++) {
+                var dA2 = (dA * QA) * (dA * QA);
+                for (var dB = -rB; dB <= rB; dB++) {
+                    var de2 = dL2 + dA2 + (dB * QB) * (dB * QB);
+                    if (de2 > R2) continue;  // 楕円体外はスキップ
+                    var key = (Li + dL) + '|' + (Ai + dA) + '|' + (Bi + dB);
+                    var arr = labIndex[key];
+                    if (!arr) continue;
+                    for (var j = 0; j < arr.length && found.length < cap; j++) {
+                        pushCandidate(arr[j]);
+                    }
+                    if (found.length >= cap) return; // 早期停止
+                }
+            }
+        }
     }
-    pages[cur].push({type:"p",text:line});
-  }
 
-  // 見出し辞書（ジャンプ用）
-  const dict={info:new Map(), main:new Map(), etc:new Map()};
-  for(const pg of ["info","main","etc"]){
-    (function walk(nodes, trail=[]){
-      for(const n of nodes){
-        const k1=n.text, k2=[...trail,n.text].join(">");
-        dict[pg].has(k1)||dict[pg].set(k1,n.id); dict[pg].set(k2,n.id);
-        n.children?.length && walk(n.children,[...trail,n.text]);
-      }
-    })(heads[pg],[]);
-  }
+    // RはLab距離。初期値/刻みは定数、上限は呼び出し引数に従う
+    var Rmin = Math.max(0, Math.min(R_START, rCap));
+    var R = Rmin;
+    while (R <= rCap && found.length < cap) { collectAtLabRadius(R); R += R_STEP; }
+    while (R <= rHardCap && found.length < cap) { collectAtLabRadius(R); R += R_STEP; }
 
-  return {title, key, pages, dict, convertWords:[...new Set(convertWords)]};
+    if (found.length === 0) {
+        var Rpad = rHardCap + R_STEP;
+        var Rlimit = rHardCap + R_PAD_MAX;
+        while (Rpad <= Rlimit && found.length < cap) { collectAtLabRadius(Rpad); Rpad += R_STEP; }
+    }
+
+    found.sort(function(a,b){ return a.dE - b.dE; });
+    return found;
 }
 
-/* === template.html 差し込み（convert-words を JSON で埋め込む） === */
-async function buildHTML(parsed){
-  // ▼ 変更：ファイル選択があればそれを優先。なければ template.html をfetch
-  let tpl;
-  if (tplPicker && tplPicker.files && tplPicker.files[0]) {
-    tpl = await tplPicker.files[0].text();
-  } else {
-    tpl = await fetch("template.html").then(r=>{ if(!r.ok) throw new Error("template.html が読み込めませんでした。"); return r.text(); });
-  }
-  const doc=new DOMParser().parseFromString(tpl,"text/html");
 
-  // タイトル & 固定キー
-  doc.title=parsed.title;
-  doc.querySelector('meta[name="trpg-key"]')?.setAttribute("content",parsed.key);
-  const headTitle=doc.querySelector("header .title"); if(headTitle) headTitle.textContent=parsed.title;
 
-  // 本文差し込み
-  const mount=(page, items)=>{
-    const sec=doc.querySelector(`section.page[data-page="${page}"]`); if(!sec) return; sec.textContent="";
-    for(const it of items){
-      if(it.type==="h"){
-        const h=doc.createElement(it.level===1?"h1":it.level===2?"h2":"h3");
-        h.dataset.id=it.id; if(it.tags.length) h.dataset.tags=it.tags.join(" "); h.appendChild(doc.createTextNode(it.text)); sec.appendChild(h);
-      }else if(it.type==="p"){
-        const p=doc.createElement("p"); p.appendChild(formatParagraph(it.text,page,parsed.dict)); sec.appendChild(p);
-      }else if(it.type==="node" && it.node?.kind==="code"){
-        const pre=doc.createElement("pre"); pre.className="code";
-        const btn=doc.createElement("button"); btn.className="copy"; btn.textContent="copy";
-        const code=doc.createElement("code"); code.appendChild(doc.createTextNode(it.node.text)); pre.append(btn,code); sec.appendChild(pre);
-      }
-    }
-  };
-  mount("info",parsed.pages.info); mount("main",parsed.pages.main); mount("etc",parsed.pages.etc);
-
-  // ◆ convert → JSON を埋め込み（template 側が読む）
-  const data = JSON.stringify({ words: parsed.convertWords }, null, 0);
-  let holder = doc.querySelector('#convert-words');
-  if (holder) {
-    holder.textContent = data;
-  } else {
-    holder = doc.createElement('script');
-    holder.type = 'application/json';
-    holder.id = 'convert-words';
-    holder.textContent = data;
-    doc.body.appendChild(holder);
-  }
-
-  return "<!doctype html>\n"+doc.documentElement.outerHTML;
+// -------- k近傍（固定点数）取得：動的半径拡張でk件を確保、候補なければフォールバック --------
+function kNearestFromIndex(labIndex, Lq, aq, bq, k, rMax){
+    if (k == null) k = 8;
+    var rCap = (rMax != null ? Math.max(rMax, 3) : 3);
+    var rHardCap = Math.max(rCap, 6);
+    var arr = collectCandidatesDynamic(labIndex, Lq, aq, bq, rCap, rHardCap, k);
+    return (arr.length > 0) ? arr.slice(0, k) : arr;
 }
 
-/* === UI === */
-btnC.onclick=async ()=>{
-  try{
-    status.textContent="変換中…";
-    const parsed=parseInput(src.value||"");
-    // ▼ 追加：ダウンロード名（2行目の固定キー優先、次にタイトル）
-    lastDownloadName = sanitizeFileName(parsed.key || parsed.title || "scenario") + ".html";
-    const html=await buildHTML(parsed);
-    dst.value=html;
-    status.textContent=`完了 ✔️（convert語: ${parsed.convertWords.length}件）`;
-  }catch(err){ status.textContent="エラー ❗ "+(err?.message||err); }
-};
-btnD.onclick=()=>{
-  const blob=new Blob([dst.value||""],{type:"text/html;charset=utf-8"});
-  const a=document.createElement("a"); a.href=URL.createObjectURL(blob);
-  a.download=lastDownloadName; // ← 変更：固定キー（2行目）由来の名前を使用
-  a.click();
-  setTimeout(()=>URL.revokeObjectURL(a.href),1000);
-};
+// -------- 最終形パターンの許可マスク（Kは常に可動） --------
+function allowedMaskForPattern(pattern){
+    return {
+        c: (pattern==='C'  || pattern==='CM' || pattern==='YC'),
+        m: (pattern==='M'  || pattern==='CM' || pattern==='MY'),
+        y: (pattern==='Y'  || pattern==='MY' || pattern==='YC'),
+        k: true
+    };
+}
+
+// -------- 距離重み(IDW)でCMYK合成（許可外チャネルは0固定） --------
+function idwBlendCMYKWithMask(samples, allowed){
+    var eps=1e-6, p=2.0; var wsum=0, wc=0, wm=0, wy=0, wk=0;
+    for (var i=0;i<samples.length;i++){
+        var s=samples[i]; var d=Math.max(eps, s.dE); var w=1/Math.pow(d,p); wsum+=w;
+        if (allowed.c) wc += w*s.c; if (allowed.m) wm += w*s.m; if (allowed.y) wy += w*s.y; if (allowed.k) wk += w*s.k;
+    }
+    return {
+        c: allowed.c ? Math.max(0, Math.min(100, wc/wsum)) : 0,
+        m: allowed.m ? Math.max(0, Math.min(100, wm/wsum)) : 0,
+        y: allowed.y ? Math.max(0, Math.min(100, wy/wsum)) : 0,
+        k: allowed.k ? Math.max(0, Math.min(100, wk/wsum)) : 0
+    };
+}
+
+// -------- パターン整形：CMYが1〜2色ゼロになるように強制（ΔE増分が最小の候補を採用） --------
+function shapeToPattern(cmyk, targetLab){
+    // 候補：C/M/Y/CM/MY/YC（Kはそのまま）
+    var cand = [];
+    function pushIfBetter(cc,mm,yy,kk){
+        var lab = cmykToLab(cc,mm,yy,kk);
+        var dE = de76(targetLab.L, targetLab.a, targetLab.b, lab.L, lab.a, lab.b);
+        cand.push({c:cc,m:mm,y:yy,k:kk, dE:dE});
+    }
+    var C=cmyk.c, M=cmyk.m, Y=cmyk.y, K=cmyk.k;
+    // 単色
+    pushIfBetter(C,0,0,K); // C
+    pushIfBetter(0,M,0,K); // M
+    pushIfBetter(0,0,Y,K); // Y
+    // Kのみ（CMY=0）も候補に含める
+    pushIfBetter(0,0,0,K); // K-only
+    // 二色
+    pushIfBetter(C,M,0,K); // CM
+    pushIfBetter(0,M,Y,K); // MY
+    pushIfBetter(C,0,Y,K); // YC
+    // 最良を返す
+    cand.sort(function(a,b){return a.dE-b.dE;});
+    return cand[0];
+}
+
+// ==== 小行列ソルバ＆LS微調整（K-onlyで一気にLを合わせる） ====
+function _solveSymmetric(JTJ, b){
+    var n = JTJ.length; var M = new Array(n);
+    for (var i=0;i<n;i++){ M[i] = JTJ[i].slice(); M[i].push(b[i]); }
+    for (var k=0;k<n;k++){
+        var piv=Math.abs(M[k][k]), pr=k; for (var r=k+1;r<n;r++){ var v=Math.abs(M[r][k]); if(v>piv){piv=v;pr=r;} }
+        if (piv<1e-12) return null; if (pr!=k){ var t=M[k]; M[k]=M[pr]; M[pr]=t; }
+        var div=M[k][k]; for (var j=k;j<=n;j++) M[k][j]/=div;
+        for (var i2=0;i2<n;i2++){ if(i2===k) continue; var f=M[i2][k]; for (var j2=k;j2<=n;j2++) M[i2][j2]-=f*M[k][j2]; }
+    }
+    var x=new Array(n); for (var i3=0;i3<n;i3++) x[i3]=M[i3][n]; return x;
+}
+var _LS_H = 1.0;      // 数値ヤコビアンの微小ステップ（%）
+var _LS_LAMBDA = 0.1; // 正則化
+function refineWithMaskLS(start, targetLab, allowed){
+    var cur = { c:start.c, m:start.m, y:start.y, k:start.k };
+    var lab = cmykToLab(cur.c, cur.m, cur.y, cur.k);
+    // 有効チャネルを列順に並べる
+    var cols = []; var names=['c','m','y','k'];
+    for (var i=0;i<4;i++){ var ch=names[i]; if(allowed[ch]) cols.push(ch); }
+    var p = cols.length; if (p===0) return { c:cur.c, m:cur.m, y:cur.y, k:cur.k, L:lab.L, a:lab.a, b:lab.b, dE:de76(targetLab.L,targetLab.a,targetLab.b, lab.L,lab.a,lab.b)};
+    // ヤコビアン J: 3 x p（前進差分）
+    var J = new Array(3); for (var r=0;r<3;r++){ J[r]=new Array(p); for (var c=0;c<p;c++) J[r][c]=0; }
+    for (var ci=0; ci<p; ci++){
+        var ch = cols[ci]; var h = _LS_H;
+        var trial = { c:cur.c, m:cur.m, y:cur.y, k:cur.k };
+        trial[ch] = Math.max(0, Math.min(100, trial[ch] + h));
+        var lab2 = cmykToLab(trial.c, trial.m, trial.y, trial.k);
+        J[0][ci] = (lab2.L - lab.L)/h; J[1][ci] = (lab2.a - lab.a)/h; J[2][ci] = (lab2.b - lab.b)/h;
+    }
+    // 正規方程式 A = J^T J + λI, b = J^T (target-lab)
+    var A = new Array(p), bvec = new Array(p);
+    for (var i2=0;i2<p;i2++){ A[i2]=new Array(p); for (var j2=0;j2<p;j2++){ var s=0; for (var r2=0;r2<3;r2++) s+=J[r2][i2]*J[r2][j2]; A[i2][j2]=s; } A[i2][i2]+=_LS_LAMBDA; }
+    var tL = targetLab.L - lab.L, ta = targetLab.a - lab.a, tb = targetLab.b - lab.b;
+    for (var i4=0;i4<p;i4++){ bvec[i4] = J[0][i4]*tL + J[1][i4]*ta + J[2][i4]*tb; }
+    var dx = _solveSymmetric(A, bvec);
+    if (dx){ for (var ci2=0; ci2<p; ci2++){ var ch2=cols[ci2]; cur[ch2]=Math.max(0, Math.min(100, cur[ch2]+dx[ci2])); } lab=cmykToLab(cur.c,cur.m,cur.y,cur.k); }
+    var dEfinal = de76(targetLab.L, targetLab.a, targetLab.b, lab.L, lab.a, lab.b);
+    return { c:cur.c, m:cur.m, y:cur.y, k:cur.k, L:lab.L, a:lab.a, b:lab.b, dE:dEfinal };
+}
+
+// -------- パターン許可での局所微調整（±REFINE_STEP） --------
+function refineWithMask(start, targetLab, allowed){
+    var best = { c:start.c, m:start.m, y:start.y, k:start.k };
+    var bestLab = cmykToLab(best.c, best.m, best.y, best.k);
+    var bestDe = de76(targetLab.L, targetLab.a, targetLab.b, bestLab.L, bestLab.a, bestLab.b);
+    for (var it=0; it<MAX_REFINE_ITERS; it++){
+        var improved=false; var chans=['c','m','y','k'];
+        for (var ci=0; ci<chans.length; ci++){
+            var ch=chans[ci]; if(!allowed[ch]) continue;
+            var deltas=[REFINE_STEP, -REFINE_STEP];
+            for (var di=0; di<deltas.length; di++){
+                var cand={ c:best.c, m:best.m, y:best.y, k:best.k };
+                cand[ch]=Math.max(0, Math.min(100, cand[ch]+deltas[di]));
+                var lab=cmykToLab(cand.c,cand.m,cand.y,cand.k);
+                var dE=de76(targetLab.L,targetLab.a,targetLab.b,lab.L,lab.a,lab.b);
+                if (dE+1e-9<bestDe){ best=cand; bestLab=lab; bestDe=dE; improved=true; }
+            }
+        }
+        if(!improved) break;
+    }
+    return { c:best.c, m:best.m, y:best.y, k:best.k, L:bestLab.L, a:bestLab.a, b:bestLab.b, dE:bestDe };
+}
+
+// -------- 高位：Lab→CMYK（k近傍→IDW→パターン整形→微調整） --------
+function adjustFromMapPatterned(labIndex, targetLab, k){
+    if (k==null) k=8;
+    // 低L & 低|ab| は K-only で早期確定
+    try {
+        var ab = Math.sqrt(targetLab.a*targetLab.a + targetLab.b*targetLab.b);
+        if (ab <= AB_TOL && targetLab.L <= getLBlack() + L_MARGIN) {
+            var allowedK = {c:false, m:false, y:false, k:true};
+            var seed = {c:0, m:0, y:0, k:50};
+            var resK = refineWithMaskLS(seed, targetLab, allowedK);
+            return resK;
+        }
+    } catch (e) {}
+    var kNN = kNearestFromIndex(labIndex, targetLab.L, targetLab.a, targetLab.b, k, 3);
+    if (!kNN || kNN.length===0) return null;
+    var patterns = ['C','M','Y','CM','MY','YC'];
+    var best=null, bestDe=1e9;
+    for (var pi=0; pi<patterns.length; pi++){
+        var p = patterns[pi];
+        var allowed = allowedMaskForPattern(p);
+        // まず、同パターンのサンプルを優先的に利用
+        var samples=[]; for (var i=0;i<kNN.length;i++){ if (kNN[i].pattern===p) samples.push(kNN[i]); }
+        if (samples.length===0) samples = kNN; // 無ければ全体で代用
+        // IDW 合成 → パターン整形 → 許可チャネルで微調整
+        var init = idwBlendCMYKWithMask(samples, allowed);
+        var shaped = shapeToPattern(init, targetLab);
+        var res = refineWithMask(shaped, targetLab, allowed);
+        if (res && res.dE < bestDe){ bestDe=res.dE; best=res; }
+    }
+    return best;
+}
+
+// 単一カラー（CMYK）を処理 - 詳細な結果を返す
+function processColorObject(color){
+    var orig = extractCMYK(color);
+    if (!orig) return {changed:false, reason:'nonCMYK'}; // spot/gray/RGB等
+
+    // まずキャッシュ（小数1桁キー）を確認
+    var cached = cacheGetResult(orig);
+    if (cached) {
+        cacheHitCount++;
+        // キャッシュには整数化のみ（非閾値）が入っている → 最後に閾値を適用
+        var finalFromCache = finalizeCMYK({ c: cached.c, m: cached.m, y: cached.y, k: cached.k });
+        if (orig.c===finalFromCache.c && orig.m===finalFromCache.m && orig.y===finalFromCache.y && orig.k===finalFromCache.k)
+            return {changed:false, reason:'same'};
+        return {changed:true, out: finalFromCache};
+    }
+
+    var labA = cmykToLab(orig.c, orig.m, orig.y, orig.k);
+    if (!gLabIndex) return {changed:false, reason:'noIndex'};
+    var adj = adjustFromMapPatterned(gLabIndex, labA, 8);
+    if (!adj) return {changed:false, reason:'noCandidate'};
+
+// 二段後処理: まず整数化のみ → キャッシュ保存、適用直前に閾値
+    var norm = intCMYK({ c: adj.c, m: adj.m, y: adj.y, k: adj.k });
+    cachePutResult(orig, norm);                 // 閾値適用前の整数値を保存
+    var finalOut = finalizeCMYK(norm);          // 閾値は最後に適用
+
+// 厳密一致のみを"同一"とみなす
+    if (orig.c===finalOut.c && orig.m===finalOut.m && orig.y===finalOut.y && orig.k===finalOut.k)
+        return {changed:false, reason:'same'};
+    return {changed:true, out: finalOut};
+}
+
+// TextFrame の文字カラー処理（塗り/線）: 実務で使用する統計を返す
+function processTextFrameColors(tf){
+    var changes=0;
+    try{
+        var attrs = tf.textRange.characterAttributes;
+        if (attrs){
+            try{
+                var fc = attrs.fillColor;
+                if (fc){ var r1 = processColorObject(fc); if (r1 && r1.changed){ attrs.fillColor = makeCMYK(r1.out.c,r1.out.m,r1.out.y,r1.out.k); changes++; } if (gProgress) gProgress.step(1); }
+            }catch(e){}
+            try{
+                var sc = attrs.strokeColor;
+                if (sc){ var r2 = processColorObject(sc); if (r2 && r2.changed){ attrs.strokeColor = makeCMYK(r2.out.c,r2.out.m,r2.out.y,r2.out.k); changes++; } if (gProgress) gProgress.step(1); }
+            }catch(e){}
+        }
+    }catch(e){}
+    return {changes:changes};
+}
+
+// GradientColor を処理（各ストップの CMYK） - カウンタ集計
+function processGradientColor(gradColor){
+    var g = gradColor.gradient; var stops = g.gradientStops;
+    var changed=0;
+    for (var i=0;i<stops.length;i++){
+        var col = stops[i].color;
+        if (col && col.typename==='CMYKColor'){
+            var res = processColorObject(col);
+            if (res.changed){ stops[i].color = makeCMYK(res.out.c,res.out.m,res.out.y,res.out.k); changed++; }
+        }
+        if (gProgress) gProgress.step(1);
+    }
+    return {changed:changed};
+}
+
+// PageItem の塗り・線を処理 - 詳細カウンタを返す
+function processPageItemColors(item){
+    var changes=0;
+    try{
+        if (item.filled){
+            var fc = item.fillColor;
+            if (fc && fc.typename==='GradientColor'){
+                var r = processGradientColor(fc); item.fillColor = fc; changes += r.changed;
+            } else {
+                var r1 = processColorObject(fc);
+                if (r1 && r1.changed){ item.fillColor = makeCMYK(r1.out.c,r1.out.m,r1.out.y,r1.out.k); changes++; }
+                if (gProgress) gProgress.step(1);
+            }
+        }
+    }catch(e){}
+    try{
+        if (item.stroked){
+            var sc = item.strokeColor;
+            if (sc && sc.typename==='GradientColor'){
+                var r2 = processGradientColor(sc); item.strokeColor = sc; changes += r2.changed;
+            } else {
+                var r3 = processColorObject(sc);
+                if (r3 && r3.changed){ item.strokeColor = makeCMYK(r3.out.c,r3.out.m,r3.out.y,r3.out.k); changes++; }
+                if (gProgress) gProgress.step(1);
+            }
+        }
+    }catch(e){}
+    return {changes:changes};
+}
+
+// 選択を走査して全適用（Group/Compound含む） - 詳細集計
+function applyToSelection(){
+    var doc = app.activeDocument; var sel = doc.selection; if (!sel) return {count:0};
+    var applied=0;
+    function walk(it){
+        if (!it) return;
+        var tn = it.typename;
+        if (tn==='GroupItem'){
+            var arr = it.pageItems; for (var i=0;i<arr.length;i++) walk(arr[i]);
+        } else if (tn==='CompoundPathItem'){
+            var arr2 = it.pathItems; for (var j=0;j<arr2.length;j++){ var r=processPageItemColors(arr2[j]); applied+=r.changes; }
+        } else if (tn==='TextFrame'){
+            var rt=processTextFrameColors(it); applied+=rt.changes;
+        } else if (tn==='PathItem' || tn==='MeshItem'){
+            var r3=processPageItemColors(it); applied+=r3.changes;
+        }
+    }
+    for (var i=0;i<sel.length;i++) walk(sel[i]);
+    return {count: applied};
+}
+
+/////////////////////////////////////////
+// 適用フェーズの試行単位（塗り/線/グラデーションストップ）を概算カウント
+function estimatePlannedAttempts() {
+    var doc = app.activeDocument;
+    var sel = doc.selection;
+    if (!sel || sel.length === 0) return 0;
+    var cnt = 0;
+    function countItem(it) {
+        if (!it) return;
+        var tn = it.typename;
+        if (tn === 'GroupItem') {
+            var arr = it.pageItems;
+            for (var i=0;i<arr.length;i++) countItem(arr[i]);
+            return;
+        }
+        if (tn === 'CompoundPathItem') {
+            var arr2 = it.pathItems;
+            for (var j=0;j<arr2.length;j++) countItem(arr2[j]);
+            return;
+        }
+        if (tn === 'TextFrame'){
+            try{
+                var at = it.textRange.characterAttributes;
+                if (at){
+                    try{ if (at.fillColor) cnt += 1; }catch(e){}
+                    try{ if (at.strokeColor) cnt += 1; }catch(e){}
+                }
+            }catch(e){}
+            return;
+        }
+        // PathItem / MeshItem など
+        try {
+            if (it.filled) {
+                var fc = it.fillColor;
+                if (fc && fc.typename === 'GradientColor') {
+                    try { cnt += fc.gradient.gradientStops.length; } catch(e){ cnt += 1; }
+                } else {
+                    cnt += 1;
+                }
+            }
+        } catch(e){}
+        try {
+            if (it.stroked) {
+                var sc = it.strokeColor;
+                if (sc && sc.typename === 'GradientColor') {
+                    try { cnt += sc.gradient.gradientStops.length; } catch(e){ cnt += 1; }
+                } else {
+                    cnt += 1;
+                }
+            }
+        } catch(e){}
+    }
+    for (var k=0;k<sel.length;k++) countItem(sel[k]);
+    return cnt;
+}
+
+
+/////////////////////////////////////////
+// メイン処理関数
+/////////////////////////////////////////
+
+// マップを生成し、計測と保持を行う処理
+(
+function main() {
+
+    var t0 = nowMs();
+    var totalPoints = 0;
+
+    // ドキュメントの色空間チェック（CMYK以外は中止）
+    try {
+        if (app.documents.length === 0) {
+            alert("CMYKドキュメントで実行してください");
+            return;
+        }
+        var _doc = app.activeDocument;
+        if (_doc.documentColorSpace !== DocumentColorSpace.CMYK) {
+            alert("CMYKドキュメントで実行してください");
+            return;
+        }
+    } catch (e) {
+        alert("CMYKドキュメントで実行してください");
+        return;
+    }
+
+
+    // 準備中ダイアログ（全処理の冒頭で表示）
+    var prepWin = null;
+    try {
+        prepWin = new Window('palette', '準備中', undefined, {closeButton:false});
+        var st0 = prepWin.add('statictext', undefined, 'オブジェクトカウントとLab色域マップを準備中...');
+        st0.preferredSize = [400, 20];
+        st0.justify = 'center';
+        prepWin.layout.layout(true);
+        prepWin.center();
+        prepWin.show();
+        try { prepWin.update(); } catch(e) {}
+        try { $.sleep(50); } catch(e) {}
+    } catch (e) {}
+
+    // 処理中のUI/Undo制御（開始）
+    var oldUILevel = null;
+    try { oldUILevel = app.userInteractionLevel; app.userInteractionLevel = UserInteractionLevel.DONTDISPLAYALERTS; } catch(e) {}
+    try { app.executeMenuCommand('Start Undo Group'); } catch(e) {}
+
+    // Lab→CMYK 逆引き用の格子ハッシュ
+    var labIndex = {}; // key: "Li|Ai|Bi" -> [{c,m,y,k,L,a,b,pattern}]
+
+    // C単色+Kを走査
+    forStep(function(K){
+        forStep(function(C){
+            try {
+                var lab = cmykToLab(C, 0, 0, K);
+                var key = labKeyFrom(lab.L, lab.a, lab.b);
+                if (!labIndex[key]) labIndex[key] = [];
+                labIndex[key].push({c: C, m: 0, y: 0, k: K, L: lab.L, a: lab.a, b: lab.b, pattern: 'C'});
+                totalPoints++;
+            } catch(e){}
+        });
+    });
+
+    // M単色+Kを走査
+    forStep(function(K){
+        forStep(function(M){
+            try {
+                var lab = cmykToLab(0, M, 0, K);
+                var key = labKeyFrom(lab.L, lab.a, lab.b);
+                if (!labIndex[key]) labIndex[key] = [];
+                labIndex[key].push({c: 0, m: M, y: 0, k: K, L: lab.L, a: lab.a, b: lab.b, pattern: 'M'});
+                totalPoints++;
+            } catch(e){}
+        });
+    });
+
+    // Y単色+Kを走査
+    forStep(function(K){
+        forStep(function(Y){
+            try {
+                var lab = cmykToLab(0, 0, Y, K);
+                var key = labKeyFrom(lab.L, lab.a, lab.b);
+                if (!labIndex[key]) labIndex[key] = [];
+                labIndex[key].push({c: 0, m: 0, y: Y, k: K, L: lab.L, a: lab.a, b: lab.b, pattern: 'Y'});
+                totalPoints++;
+            } catch(e){}
+        });
+    });
+
+    // CM二色+Kを走査
+    forStep(function(K){
+        forStep(function(C){
+            forStep(function(M){
+                try {
+                    var lab = cmykToLab(C, M, 0, K);
+                    var key = labKeyFrom(lab.L, lab.a, lab.b);
+                    if (!labIndex[key]) labIndex[key] = [];
+                    labIndex[key].push({c: C, m: M, y: 0, k: K, L: lab.L, a: lab.a, b: lab.b, pattern: 'CM'});
+                    totalPoints++;
+                } catch(e){}
+            });
+        });
+    });
+
+    // MY二色+Kを走査
+    forStep(function(K){
+        forStep(function(M){
+            forStep(function(Y){
+                try {
+                    var lab = cmykToLab(0, M, Y, K);
+                    var key = labKeyFrom(lab.L, lab.a, lab.b);
+                    if (!labIndex[key]) labIndex[key] = [];
+                    labIndex[key].push({c: 0, m: M, y: Y, k: K, L: lab.L, a: lab.a, b: lab.b, pattern: 'MY'});
+                    totalPoints++;
+                } catch(e){}
+            });
+        });
+    });
+
+    // YC二色+Kを走査
+    forStep(function(K){
+        forStep(function(Y){
+            forStep(function(C){
+                try {
+                    var lab = cmykToLab(C, 0, Y, K);
+                    var key = labKeyFrom(lab.L, lab.a, lab.b);
+                    if (!labIndex[key]) labIndex[key] = [];
+                    labIndex[key].push({c: C, m: 0, y: Y, k: K, L: lab.L, a: lab.a, b: lab.b, pattern: 'YC'});
+                    totalPoints++;
+                } catch(e){}
+            });
+        });
+    });
+
+    // apply系ユーティリティから参照できるように公開
+    gLabIndex = labIndex;
+
+
+    // プログレスバー（適用フェーズのみ）開始：分母=塗り/線/ストップの概算
+    var planned = 0;
+    try { planned = estimatePlannedAttempts(); } catch(e) {}
+
+    // 準備中ダイアログを閉じる
+    try { if (prepWin) prepWin.close(); } catch (e) {}
+
+    gProgress = createProgressBar(planned > 0 ? planned : 100);
+
+    // 選択オブジェクトへ適用（色の置換）
+    var appliedInfo = applyToSelection();
+    var totalSec = (nowMs() - t0)/1000.0;  // スクリプト開始からの総時間
+
+    // 実行結果をダイアログ表示
+    var msg = [];
+    msg.push("完了");
+    msg.push("総点数: " + totalPoints);
+    msg.push("適用カラー数: " + appliedInfo.count);
+    msg.push("適用時間: " + round2(totalSec) + " 秒");
+    msg.push("cacheヒット: " + cacheHitCount);
+    // 処理中のUI/Undo制御（終了）
+    try { app.executeMenuCommand('End Undo Group'); } catch(e) {}
+    try { if (oldUILevel !== null) app.userInteractionLevel = oldUILevel; } catch(e) {}
+    if (gProgress) { gProgress.close(); gProgress = null; }
+    // ---- メモリ解放（実務向け）----
+    try {
+        // 大きいデータ構造の参照を切る
+        gLabIndex = null;          // ラボインデックスのグローバル参照を破棄
+        resultCache = {};          // 入力→出力キャッシュをクリア
+        labConvCache = {};         // CMYK→Lab メモ化キャッシュをクリア
+
+        // カウンタ類も初期化（任意）
+        cacheHitCount = 0;
+
+        // GC を明示的に促す（ExtendScript）
+        $.gc();
+    } catch (e) {}
+    try { app.redraw(); } catch(e) {}
+    alert(msg.join("\n"));
 })();
+　
 </script>
-</body>
-</html>
